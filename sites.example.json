@@ -1,0 +1,19 @@
+{
+  "sites": [
+    {
+      "site_id": "my_site",
+      "display_name": "追加サイトの記入例",
+      "top_url": "https://www.example.co.jp/",
+      "enabled": false,
+      "notes": "このファイルは記入例です。実際の追加は sites.json に書いてください。",
+      "selectors": {
+        "list_url_contains": "/search/result",
+        "list_link": "a.detail-link",
+        "next_page": "a.pagination-next",
+        "company_name": "h1.company-name",
+        "address": ".address",
+        "phone": ".tel"
+      }
+    }
+  ]
+}

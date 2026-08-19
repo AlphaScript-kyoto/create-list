@@ -1,0 +1,9 @@
+output/
+logs/
+__pycache__/
+*.pyc
+.browser_profile/
+*.egg-info/
+.venv/
+venv/
+.env

@@ -1,0 +1,60 @@
+{
+  "output_dir": "output",
+  "log_dir": "logs",
+  "csv_flush_every": 5,
+  "governor": {
+    "batch_min": 1,
+    "batch_max": 5,
+    "rest_min_sec": 30,
+    "rest_max_sec": 300,
+    "page_delay_min_sec": 1.0,
+    "page_delay_max_sec": 3.0
+  },
+  "pace_multipliers": {
+    "safe": 1.5,
+    "normal": 1.0,
+    "fast": 0.7
+  },
+  "browser": {
+    "headless": false,
+    "incognito": false,
+    "channel": "chrome",
+    "clear_storage_on_open": false,
+    "profile_subdir": "chrome"
+  },
+  "sites_file": "sites.json",
+  "company_filter": {
+    "enabled": true,
+    "max_employees": 50,
+    "exclude_name_keywords": [
+      "アマゾン",
+      "Amazon",
+      "グーグル",
+      "Google",
+      "マイクロソフト",
+      "Microsoft",
+      "楽天",
+      "リクルート",
+      "パナソニック",
+      "ソニー",
+      "トヨタ自動車",
+      "ホンダ",
+      "日産自動車",
+      "イオン",
+      "ユニクロ",
+      "ファーストリテイリング",
+      "ソフトバンク",
+      "NTT",
+      "富士通",
+      "日立製作所",
+      "セブン-イレブン",
+      "セブンイレブン",
+      "ローソン",
+      "ファミリーマート",
+      "スターバックス",
+      "マクドナルド",
+      "ヤマト運輸",
+      "佐川急便"
+    ]
+  }
+}
