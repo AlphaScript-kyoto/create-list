@@ -11,6 +11,8 @@ from collector.csv_schema import build_row, csv_columns
 # https://tabelog.com/{pref}/A2601/A260201/26012136/
 _SHOP_PATH = re.compile(r"^/[a-z]+/A\d+/A\d+/(\d+)/?$")
 _PHONE_PATTERN = re.compile(r"0\d{1,4}[-−‒–—]?\d{1,4}[-−‒–—]?\d{3,4}")
+_OPEN_DATE_YMD = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_OPEN_DATE_SLASH = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
 
 
 class TabelogAdapter(SiteAdapter):
@@ -239,6 +241,15 @@ class TabelogAdapter(SiteAdapter):
 
     @staticmethod
     def _clean_open_date(text: str) -> str:
-        text = re.sub(r"\s+", "", text or "")
-        text = text.replace("オープン", "")
-        return text
+        """CSV 用。例: オープン日　2026/9/8"""
+        if not (text or "").strip():
+            return ""
+        raw = re.sub(r"\s+", "", text)
+        raw = raw.replace("オープン日", "").replace("オープン", "")
+        match = _OPEN_DATE_YMD.search(text) or _OPEN_DATE_YMD.search(raw)
+        if not match:
+            match = _OPEN_DATE_SLASH.search(text) or _OPEN_DATE_SLASH.search(raw)
+        if not match:
+            return ""
+        year, month, day = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        return f"オープン日　{year}/{month}/{day}"
