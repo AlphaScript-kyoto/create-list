@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import unicodedata
+
+from collector.jp_phone import format_jp_phone, phone_digits
 
 COMMON_COLUMNS = [
     "企業名",
@@ -55,8 +58,43 @@ def extract_email(text: str) -> str:
 
 def is_mobile_phone(phone: str) -> bool:
     """090 / 080 / 070 で始まる携帯電話。075 などの市外局番は対象外。"""
-    digits = re.sub(r"\D", "", phone or "")
+    digits = phone_digits(phone)
     return digits.startswith(_MOBILE_PREFIXES)
+
+
+def normalize_text(value: str) -> str:
+    """全角半角をそろえ、空白を1つにまとめる。"""
+    text = unicodedata.normalize("NFKC", value or "")
+    text = text.replace("\u3000", " ")
+    return " ".join(text.split())
+
+
+def clean_contact_name(value: str) -> str:
+    """「その他」から始まる担当者欄は空にする（行は残す）。"""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    first_line = text.splitlines()[0].strip()
+    if text.startswith("その他") or first_line.startswith("その他"):
+        return ""
+    return text
+
+
+def company_key(row: dict[str, str]) -> tuple[str, str] | None:
+    """社名 + 住所。どちらか空なら重複判定しない。"""
+    name = normalize_text(
+        row.get("企業名")
+        or row.get("社名")
+        or row.get("会社名")
+        or row.get("店名")
+        or ""
+    )
+    address = normalize_text(
+        row.get("住所") or row.get("本社所在地") or row.get("所在地") or ""
+    )
+    if not name or not address:
+        return None
+    return (name, address)
 
 
 def build_row(
@@ -76,9 +114,9 @@ def build_row(
         "企業名": (company_name or "").strip(),
         "郵便番号": postal_value,
         "住所": address_value,
-        "電話番号": (phone or "").strip(),
+        "電話番号": format_jp_phone(phone),
         "メールアドレス": extract_email(email),
-        "担当者名": (contact or "").strip(),
+        "担当者名": clean_contact_name(contact),
         "掲載サイト": site_name,
         "詳細URL": detail_url,
     }

@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import logging
-import unicodedata
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from adapters.base import SiteAdapter
-from collector.csv_schema import COMMON_COLUMNS, is_mobile_phone
+from collector.csv_schema import (
+    COMMON_COLUMNS,
+    clean_contact_name,
+    company_key,
+    is_mobile_phone,
+    normalize_text,
+)
 from collector.csv_writer import CsvWriter
 from collector.governor import Governor
+from collector.jp_phone import format_jp_phone
+from collector.known_list import KnownList
 
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[str, int, int | None], None]
@@ -62,6 +69,7 @@ class Orchestrator:
         scheduler: StepScheduler | None = None,
         company_filter=None,
         recruitment_area: dict[str, str] | None = None,
+        known_list_path: Path | None = None,
     ) -> None:
         self._adapter = adapter
         self._page = page
@@ -77,6 +85,8 @@ class Orchestrator:
         self._scheduler = scheduler or ImmediateScheduler()
         self._company_filter = company_filter
         self._recruitment_area = dict(recruitment_area or {})
+        self._known_list_path = Path(known_list_path) if known_list_path else None
+        self._known_list: KnownList | None = None
         if company_filter is not None:
             self._adapter.set_company_filter(company_filter)
 
@@ -92,6 +102,7 @@ class Orchestrator:
         self._seen_companies: set[tuple[str, str]] = set()
         self._skipped_duplicates = 0
         self._skipped_filtered = 0
+        self._skipped_known = 0
 
     @property
     def collected_count(self) -> int:
@@ -111,7 +122,35 @@ class Orchestrator:
 
     def start(self) -> None:
         """非同期収集を開始（GUI 向け）。"""
-        self._scheduler.schedule(self._phase_validate, 0)
+        self._scheduler.schedule(self._phase_prepare, 0)
+
+    def _phase_prepare(self) -> None:
+        if self._stopped:
+            self._finish(None)
+            return
+        if self._known_list_path:
+            self._log(
+                "実装済みリストを読み込みます。"
+                "初回は索引づくりで少し時間がかかることがあります…"
+            )
+            self._scheduler.schedule(self._phase_load_known, 0.15)
+            return
+        self._phase_validate()
+
+    def _phase_load_known(self) -> None:
+        if self._stopped:
+            self._finish(None)
+            return
+        try:
+            assert self._known_list_path is not None
+            self._known_list = KnownList.load(self._known_list_path, log=self._log)
+            self._log(
+                f"実装済みリスト: 電話 {self._known_list.phone_count:,} 件と照合します"
+            )
+        except Exception as exc:
+            self._known_list = None
+            self._log(f"実装済みリストを読めませんでした（照合なしで続行）: {exc}")
+        self._phase_validate()
 
     def run(self) -> Path | None:
         """同期収集（CLI 検証向け）。"""
@@ -217,6 +256,7 @@ class Orchestrator:
         self._seen_companies = set()
         self._skipped_duplicates = 0
         self._skipped_filtered = 0
+        self._skipped_known = 0
         columns = self._adapter.csv_columns()
         extra_columns = self._adapter.extra_columns()
         if columns is None:
@@ -248,6 +288,7 @@ class Orchestrator:
         try:
             self._page.goto(url, wait_until="domcontentloaded")
             row = self._adapter.extract_detail(self._page, url)
+            self._normalize_csv_fields(row)
             assert self._writer is not None
             name = (
                 row.get("企業名")
@@ -266,12 +307,17 @@ class Orchestrator:
                 phone = row.get("電話番号") or row.get("企業代表番号") or row.get("専用電話番号") or ""
                 if is_mobile_phone(phone):
                     skip_reason = "携帯電話番号（090/080/070）のため除外"
+            if not skip_reason and self._known_list and self._known_list.contains(row):
+                skip_reason = "実装済みリストに既出"
             if skip_reason:
-                self._skipped_filtered += 1
+                if skip_reason == "実装済みリストに既出":
+                    self._skipped_known += 1
+                else:
+                    self._skipped_filtered += 1
                 self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{skip_reason}）")
                 self._progress("detail", self._collected, self._progress_total())
             else:
-                dup_key = self._company_key(row)
+                dup_key = company_key(row)
                 if dup_key and dup_key in self._seen_companies:
                     self._skipped_duplicates += 1
                     self._log(
@@ -318,6 +364,15 @@ class Orchestrator:
 
         self._scheduler.schedule(self._phase_detail_next, delay)
 
+    @staticmethod
+    def _normalize_csv_fields(row: dict[str, str]) -> None:
+        """CSV に書く直前に、電話のハイフンと「その他」担当者を整える。"""
+        for key in ("電話番号", "企業代表番号", "専用電話番号"):
+            if row.get(key):
+                row[key] = format_jp_phone(row[key])
+        if row.get("担当者名"):
+            row["担当者名"] = clean_contact_name(row["担当者名"])
+
     def _resume_after_rest(self) -> None:
         if self._stopped:
             self._rest_end()
@@ -338,34 +393,11 @@ class Orchestrator:
             return self._max_items
         return len(self._urls)
 
-    @staticmethod
-    def _normalize_text(value: str) -> str:
-        text = unicodedata.normalize("NFKC", value or "")
-        text = text.replace("\u3000", " ")
-        return " ".join(text.split())
-
-    @classmethod
-    def _company_key(cls, row: dict[str, str]) -> tuple[str, str] | None:
-        """社名 + 住所。どちらか空なら重複判定しない。"""
-        name = cls._normalize_text(
-            row.get("企業名")
-            or row.get("社名")
-            or row.get("会社名")
-            or row.get("店名")
-            or ""
-        )
-        address = cls._normalize_text(
-            row.get("住所") or row.get("本社所在地") or row.get("所在地") or ""
-        )
-        if not name or not address:
-            return None
-        return (name, address)
-
     def _match_recruitment_area(self, row: dict[str, str]) -> bool:
         """本社所在地（住所/所在地）に、指定された県・市の両方が含まれるか判定する。"""
-        pref = self._normalize_text(self._recruitment_area.get("募集県", ""))
-        city = self._normalize_text(self._recruitment_area.get("募集市", ""))
-        address = self._normalize_text(
+        pref = normalize_text(self._recruitment_area.get("募集県", ""))
+        city = normalize_text(self._recruitment_area.get("募集市", ""))
+        address = normalize_text(
             row.get("住所") or row.get("本社所在地") or row.get("所在地") or ""
         )
         if not pref or not city or not address:
@@ -393,6 +425,8 @@ class Orchestrator:
                     f"重複スキップ: {self._skipped_duplicates} 件"
                     "（社名と住所が同じ会社は 1 件のみ保存）"
                 )
+            if self._skipped_known:
+                self._log(f"実装済みリストと重複: {self._skipped_known} 件")
             if self._skipped_filtered:
                 self._log(f"フィルタでスキップ: {self._skipped_filtered} 件")
             logger.info("Saved CSV: %s", csv_path)

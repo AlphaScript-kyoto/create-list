@@ -124,10 +124,12 @@ class RikunabiNextAdapter(SiteAdapter):
             email = extract_email(self._company_info_cell(page, "お問い合わせ先"))
 
         contact = self._company_info_cell(page, "担当者")
-        if not contact:
+        if (contact or "").strip().startswith("その他"):
+            contact = ""
+        elif not contact:
             contact = self._company_info_cell(page, "採用担当")
-        if not contact:
-            contact = self._company_info_cell(page, "代表者")
+            if not contact:
+                contact = self._company_info_cell(page, "代表者")
 
         return build_row(
             site_name=self.display_name,

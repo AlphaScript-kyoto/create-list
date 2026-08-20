@@ -56,5 +56,9 @@
       "ヤマト運輸",
       "佐川急便"
     ]
+  },
+  "known_list": {
+    "enabled": true,
+    "path": "output/現状のmplist/実装済みリスト.csv"
   }
 }

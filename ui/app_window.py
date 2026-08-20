@@ -58,8 +58,8 @@ class AppWindow(ctk.CTk):
         self._rest_end_time: float | None = None
 
         self.title("半手動リスト収集ツール")
-        self.geometry("680x840")
-        self.minsize(640, 740)
+        self.geometry("680x900")
+        self.minsize(640, 780)
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
@@ -131,6 +131,24 @@ class AppWindow(ctk.CTk):
         ).grid(row=5, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         self._on_area_toggle()
 
+        known_default = bool((self._config.get("known_list") or {}).get("enabled", True))
+        known_path = self._known_list_path()
+        self._known_enabled_var = ctk.BooleanVar(value=known_default and known_path.is_file())
+        self._known_check = ctk.CTkCheckBox(
+            top,
+            text="実装済みリストと重複する会社は保存しない",
+            variable=self._known_enabled_var,
+        )
+        self._known_check.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
+        ctk.CTkLabel(
+            top,
+            text="電話番号で照合します（社名の表記が違っても、同じ番号なら既出とみなします）。既定ファイルは output/現状のmplist/実装済みリスト.csv です。",
+            text_color="gray",
+            wraplength=520,
+            justify="left",
+            anchor="w",
+        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=4)
         self._open_btn = ctk.CTkButton(btn_frame, text="開く", width=100, command=self._on_open)
@@ -183,6 +201,13 @@ class AppWindow(ctk.CTk):
         ).pack(fill="x", padx=12, pady=(0, 12))
 
         self._append_log("半手動リスト収集ツールを起動しました。")
+        if self._known_list_path().is_file():
+            self._append_log(f"実装済みリストを検出: {self._known_list_path()}")
+        else:
+            self._append_log(
+                "実装済みリストが見つかりません。"
+                "output/現状のmplist/実装済みリスト.csv を置くと、収集時に重複を避けられます。"
+            )
 
     def _append_log(self, message: str) -> None:
         line = timestamp_log(message) + "\n"
@@ -250,6 +275,7 @@ class AppWindow(ctk.CTk):
             self._collect_btn.configure(state=state_collect)
             self._stop_btn.configure(state=state_stop)
             self._area_check.configure(state=state_open)
+            self._known_check.configure(state=state_open)
             if collecting:
                 self._pref_combo.configure(state="disabled")
                 self._city_combo.configure(state="disabled")
@@ -279,6 +305,14 @@ class AppWindow(ctk.CTk):
         if is_placeholder(prefecture) or is_placeholder(city):
             return {}
         return {"募集県": prefecture, "募集市": city}
+
+    def _known_list_path(self) -> Path:
+        cfg = self._config.get("known_list") or {}
+        rel = cfg.get("path", "output/現状のmplist/実装済みリスト.csv")
+        path = Path(rel)
+        if not path.is_absolute():
+            path = self._project_root / path
+        return path
 
     def _selected_adapter(self) -> SiteAdapter | None:
         return self._adapter_map.get(self._site_var.get())
@@ -372,13 +406,23 @@ class AppWindow(ctk.CTk):
         except Exception:
             pass
         self._append_log(f"収集対象タブ: {page.url}")
-        self._run_collect(adapter, limit, recruitment_area)
+        known_path = None
+        if self._known_enabled_var.get():
+            candidate = self._known_list_path()
+            if candidate.is_file():
+                known_path = candidate
+            else:
+                self._append_log(
+                    "実装済みリストのファイルが無いので、今回は照合なしで収集します。"
+                )
+        self._run_collect(adapter, limit, recruitment_area, known_path)
 
     def _run_collect(
         self,
         adapter: SiteAdapter,
         limit: int,
         recruitment_area: dict[str, str] | None = None,
+        known_list_path: Path | None = None,
     ) -> None:
         page = self._browser.pick_page(getattr(adapter, "list_url_hint", "")) or self._browser.page
         if page is None:
@@ -416,6 +460,7 @@ class AppWindow(ctk.CTk):
             scheduler=scheduler,
             company_filter=CompanyFilter.from_config(self._config),
             recruitment_area=recruitment_area,
+            known_list_path=known_list_path,
         )
         self._orchestrator = orchestrator
         try:
