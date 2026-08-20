@@ -219,12 +219,19 @@ class Orchestrator:
             self._complete_scan_phase()
             return
 
+        if new_count == 0 and self._scan_page_num > 1:
+            self._log("  新しい求人リンクが増えなかったため、一覧スキャンを終了します。")
+            self._complete_scan_phase()
+            return
+
         if self._adapter.go_next_page(self._page):
             self._scan_page_num += 1
             delay = self._governor.sample_page_delay()
             self._scheduler.schedule(self._phase_scan_list_page, delay)
             return
 
+        if self._scan_page_num == 1:
+            self._log("  次の一覧ページへ進めなかったため、このページだけでスキャンを終了します。")
         self._complete_scan_phase()
 
     def _complete_scan_phase(self) -> None:

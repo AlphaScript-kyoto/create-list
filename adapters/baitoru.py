@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from adapters.base import SiteAdapter
 from collector.csv_schema import build_row, csv_columns, extract_email
 
 _JOBDETAIL_PATTERN = re.compile(r"/jobdetail/\d+")
 _PHONE_PATTERN = re.compile(r"0\d{1,3}[-−‒–—]?\d{1,4}[-−‒–—]?\d{3,4}")
+_PAGE_SUFFIX = re.compile(r"/page(\d+)/?$", re.I)
+
+
+def next_jlist_url(current: str) -> str | None:
+    """一覧 URL の次ページ（/page2, /page3 …）。一覧でなければ None。"""
+    parsed = urlparse(current)
+    path = parsed.path or "/"
+    if "/jlist/" not in path and "/joblist/" not in path:
+        return None
+    stripped = path.rstrip("/")
+    match = _PAGE_SUFFIX.search(stripped)
+    if match:
+        nxt = int(match.group(1)) + 1
+        new_path = _PAGE_SUFFIX.sub(f"/page{nxt}", stripped) + "/"
+    else:
+        new_path = stripped + "/page2/"
+    return urlunparse((parsed.scheme, parsed.netloc, new_path, "", parsed.query, ""))
 
 
 class BaitoruAdapter(SiteAdapter):
@@ -73,19 +90,53 @@ class BaitoruAdapter(SiteAdapter):
         return links
 
     def go_next_page(self, page) -> bool:
-        for label in ("次へ", "次のページ", "次の20件"):
-            link = page.get_by_role("link", name=re.compile(label))
-            if link.count() == 0:
-                link = page.get_by_text(label, exact=True)
-            if link.count() > 0:
-                try:
-                    link.first.click()
-                    page.wait_for_load_state("domcontentloaded")
-                    page.wait_for_timeout(1200)
+        previous = page.url
+        next_url = next_jlist_url(previous)
+        if next_url and next_url.rstrip("/") != previous.rstrip("/"):
+            try:
+                page.goto(next_url, wait_until="domcontentloaded")
+                page.wait_for_timeout(1200)
+                if self._is_advanced_list_page(page, previous):
                     return True
-                except Exception:
-                    continue
+            except Exception:
+                pass
+            try:
+                if page.url.rstrip("/") != previous.rstrip("/"):
+                    page.goto(previous, wait_until="domcontentloaded")
+                    page.wait_for_timeout(800)
+            except Exception:
+                pass
+
+        if self._click_next_control(page) and self._is_advanced_list_page(page, previous):
+            return True
         return False
+
+    def _click_next_control(self, page) -> bool:
+        locators = (
+            page.locator('a[rel="next"]'),
+            page.locator("a[href*='/page']").filter(has_text=re.compile(r"次へ")),
+            page.get_by_role("link", name=re.compile(r"次へ")),
+            page.get_by_role("button", name=re.compile(r"次へ")),
+            page.locator("a").filter(has_text=re.compile(r"^\s*次へ")),
+        )
+        for loc in locators:
+            try:
+                if loc.count() == 0:
+                    continue
+                loc.first.click(timeout=4000)
+                page.wait_for_load_state("domcontentloaded")
+                page.wait_for_timeout(1200)
+                return True
+            except Exception:
+                continue
+        return False
+
+    def _is_advanced_list_page(self, page, previous_url: str) -> bool:
+        if not self.validate_list_page(page):
+            return False
+        if page.url.rstrip("/") == previous_url.rstrip("/"):
+            return False
+        return bool(self.extract_list_links(page))
 
     def extract_detail(self, page, url: str) -> dict[str, str]:
         page.wait_for_load_state("domcontentloaded")
