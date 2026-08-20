@@ -2,6 +2,7 @@
   "output_dir": "output",
   "log_dir": "logs",
   "csv_flush_every": 5,
+  "csv_rows_per_file": 50,
   "governor": {
     "batch_min": 1,
     "batch_max": 5,

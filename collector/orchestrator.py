@@ -70,6 +70,7 @@ class Orchestrator:
         company_filter=None,
         recruitment_areas: list[dict[str, str]] | None = None,
         known_list_path: Path | None = None,
+        csv_rows_per_file: int = 0,
     ) -> None:
         self._adapter = adapter
         self._page = page
@@ -82,6 +83,7 @@ class Orchestrator:
         self._rest_start = rest_start_callback or (lambda _sec: None)
         self._rest_end = rest_end_callback or (lambda: None)
         self._flush_every = flush_every
+        self._csv_rows_per_file = max(0, int(csv_rows_per_file))
         self._scheduler = scheduler or ImmediateScheduler()
         self._company_filter = company_filter
         self._recruitment_areas = list(recruitment_areas or [])
@@ -254,6 +256,8 @@ class Orchestrator:
             ]
             self._log(f"  住所フィルタ: {' / '.join(labels)} のいずれかに一致するものだけ保存します")
         self._log("  CSV ルール: 090/080/070 は出さない／実装済みは出さない（全サイト共通）")
+        if self._csv_rows_per_file > 0:
+            self._log(f"  CSV 区切り: {self._csv_rows_per_file} 件ごとにファイルを分けます")
         self._detail_index = 0
         self._collected = 0
         self._seen_companies = set()
@@ -272,6 +276,7 @@ class Orchestrator:
             columns=columns,
             flush_every=self._flush_every,
             known_list=self._known_list,
+            rows_per_file=self._csv_rows_per_file,
         )
         self._progress("detail", 0, len(self._urls))
         delay = self._governor.sample_page_delay()
@@ -339,6 +344,8 @@ class Orchestrator:
                         if dup_key:
                             self._seen_companies.add(dup_key)
                         self._collected += 1
+                        if self._writer.last_closed_path:
+                            self._log(f"CSV を区切って保存しました: {self._writer.last_closed_path}")
                         self._csv_path = self._writer.file_path
                         if self._known_list:
                             try:
@@ -434,12 +441,20 @@ class Orchestrator:
     def _finish(self, csv_path: Path | None) -> None:
         logger = logging.getLogger("list_collector")
         self._rest_end()
+        csv_files: list[Path] = []
         if self._writer:
             self._writer.close()
+            csv_files = list(self._writer.closed_paths)
+            if self._writer.file_path:
+                csv_path = self._writer.file_path
             self._writer = None
 
         if csv_path and self._collected > 0:
-            self._log(f"CSV を保存しました: {csv_path}")
+            if csv_files:
+                for path in csv_files:
+                    self._log(f"CSV を保存しました: {path}")
+            else:
+                self._log(f"CSV を保存しました: {csv_path}")
             if self._skipped_duplicates:
                 self._log(
                     f"重複スキップ: {self._skipped_duplicates} 件"

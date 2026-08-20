@@ -58,11 +58,13 @@ class AppWindow(ctk.CTk):
         self._is_collecting = False
         self._rest_after_id: str | None = None
         self._rest_end_time: float | None = None
+        self._elapsed_after_id: str | None = None
+        self._collect_started_at: float | None = None
         self._selected_areas: list[tuple[str, str]] = []
 
         self.title("半手動リスト収集ツール")
-        self.geometry("680x960")
-        self.minsize(640, 820)
+        self.geometry("680x1000")
+        self.minsize(640, 860)
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
@@ -91,9 +93,15 @@ class AppWindow(ctk.CTk):
         self._limit_entry.grid(row=1, column=1, sticky="w", **pad)
         ctk.CTkLabel(top, text="（0 = 上限なし）", text_color="gray").grid(row=1, column=2, sticky="w")
 
-        ctk.CTkLabel(top, text="ペース:").grid(row=2, column=0, sticky="w", **pad)
+        ctk.CTkLabel(top, text="CSV区切り:").grid(row=2, column=0, sticky="w", **pad)
+        self._split_entry = ctk.CTkEntry(top, width=120)
+        self._split_entry.insert(0, str(int(self._config.get("csv_rows_per_file", 50))))
+        self._split_entry.grid(row=2, column=1, sticky="w", **pad)
+        ctk.CTkLabel(top, text="件ごと（0 = 1ファイル）", text_color="gray").grid(row=2, column=2, sticky="w")
+
+        ctk.CTkLabel(top, text="ペース:").grid(row=3, column=0, sticky="w", **pad)
         pace_frame = ctk.CTkFrame(top, fg_color="transparent")
-        pace_frame.grid(row=2, column=1, columnspan=2, sticky="w", **pad)
+        pace_frame.grid(row=3, column=1, columnspan=2, sticky="w", **pad)
         self._pace_var = ctk.StringVar(value="標準")
         for label in self.PACE_OPTIONS:
             ctk.CTkRadioButton(pace_frame, text=label, variable=self._pace_var, value=label).pack(
@@ -107,10 +115,10 @@ class AppWindow(ctk.CTk):
             variable=self._area_enabled_var,
             command=self._on_area_toggle,
         )
-        self._area_check.grid(row=3, column=0, columnspan=3, sticky="w", **pad)
+        self._area_check.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
 
         area_frame = ctk.CTkFrame(top, fg_color="transparent")
-        area_frame.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
+        area_frame.grid(row=5, column=0, columnspan=3, sticky="w", **pad)
         ctk.CTkLabel(area_frame, text="県:").pack(side="left", padx=(0, 6))
         self._pref_combo = ctk.CTkComboBox(
             area_frame,
@@ -130,7 +138,7 @@ class AppWindow(ctk.CTk):
         self._area_add_btn.pack(side="left", padx=(12, 0))
 
         list_header = ctk.CTkFrame(top, fg_color="transparent")
-        list_header.grid(row=5, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        list_header.grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
         ctk.CTkLabel(list_header, text="選んだ募集地:").pack(side="left")
         self._area_clear_btn = ctk.CTkButton(
             list_header, text="すべて解除", width=90, command=self._on_area_clear, height=24
@@ -138,7 +146,7 @@ class AppWindow(ctk.CTk):
         self._area_clear_btn.pack(side="left", padx=(12, 0))
 
         self._area_list_frame = ctk.CTkScrollableFrame(top, height=88, width=520)
-        self._area_list_frame.grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        self._area_list_frame.grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
         self._area_empty_label = ctk.CTkLabel(
             self._area_list_frame,
             text="（まだ選んでいません）",
@@ -153,7 +161,7 @@ class AppWindow(ctk.CTk):
             wraplength=520,
             justify="left",
             anchor="w",
-        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         self._on_area_toggle()
 
         known_path = self._known_list_path()
@@ -164,7 +172,7 @@ class AppWindow(ctk.CTk):
             wraplength=520,
             justify="left",
             anchor="w",
-        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=9, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         if known_path.is_file():
             status = f"実装済みリスト: {known_path.name} を照合します"
             color = "#166534"
@@ -174,7 +182,7 @@ class AppWindow(ctk.CTk):
         self._known_status_label = ctk.CTkLabel(
             top, text=status, text_color=color, wraplength=520, justify="left", anchor="w"
         )
-        self._known_status_label.grid(row=9, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        self._known_status_label.grid(row=10, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=4)
@@ -189,6 +197,9 @@ class AppWindow(ctk.CTk):
 
         self._progress_label = ctk.CTkLabel(self, text="待機中")
         self._progress_label.pack(anchor="w", padx=16, pady=(8, 0))
+
+        self._elapsed_label = ctk.CTkLabel(self, text="経過時間: —")
+        self._elapsed_label.pack(anchor="w", padx=16, pady=(2, 0))
 
         self._rest_label = ctk.CTkLabel(self, text="", text_color="#f59e0b")
         self._rest_label.pack(anchor="w", padx=16, pady=(2, 0))
@@ -276,6 +287,37 @@ class AppWindow(ctk.CTk):
         self._rest_end_time = None
         self._rest_label.configure(text="")
 
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        total = max(0, int(seconds))
+        days, rem = divmod(total, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, secs = divmod(rem, 60)
+        return f"{days}日 {hours}時間 {minutes}分 {secs}秒"
+
+    def _start_elapsed_timer(self) -> None:
+        self._stop_elapsed_timer()
+        self._collect_started_at = time.monotonic()
+        self._tick_elapsed_timer()
+
+    def _tick_elapsed_timer(self) -> None:
+        if self._collect_started_at is None:
+            return
+        elapsed = time.monotonic() - self._collect_started_at
+        self._elapsed_label.configure(text=f"経過時間: {self._format_elapsed(elapsed)}")
+        self._elapsed_after_id = self.after(500, self._tick_elapsed_timer)
+
+    def _stop_elapsed_timer(self, keep_last: bool = False) -> None:
+        if self._elapsed_after_id is not None:
+            try:
+                self.after_cancel(self._elapsed_after_id)
+            except Exception:
+                pass
+            self._elapsed_after_id = None
+        if not keep_last:
+            self._collect_started_at = None
+            self._elapsed_label.configure(text="経過時間: —")
+
     def _set_browser_status(self, text: str, color: str = "gray") -> None:
         self._browser_status_label.configure(text=text, text_color=color)
 
@@ -303,6 +345,8 @@ class AppWindow(ctk.CTk):
             self._collect_btn.configure(state=state_collect)
             self._stop_btn.configure(state=state_stop)
             self._area_check.configure(state=state_open)
+            self._limit_entry.configure(state=state_open)
+            self._split_entry.configure(state=state_open)
             if collecting:
                 self._pref_combo.configure(state="disabled")
                 self._city_combo.configure(state="disabled")
@@ -407,6 +451,12 @@ class AppWindow(ctk.CTk):
         except ValueError:
             return 0
 
+    def _parse_split(self) -> int:
+        try:
+            return max(0, int(self._split_entry.get().strip() or "0"))
+        except ValueError:
+            return 0
+
     def _pace_multiplier(self) -> float:
         pace_key = self.PACE_OPTIONS.get(self._pace_var.get(), "normal")
         return float(self._config.get("pace_multipliers", {}).get(pace_key, 1.0))
@@ -479,8 +529,10 @@ class AppWindow(ctk.CTk):
             return
 
         limit = self._parse_limit()
+        split_every = self._parse_split()
         self._is_collecting = True
         self._set_collecting(True)
+        self._start_elapsed_timer()
         self._append_log("収集を開始します…")
         tab_urls = self._browser.tab_urls()
         if tab_urls:
@@ -495,7 +547,7 @@ class AppWindow(ctk.CTk):
             self._append_log(
                 "実装済みリストのファイルが無いので、今回は未登録判定なしです（090/080/070 は除外します）。"
             )
-        self._run_collect(adapter, limit, recruitment_areas, known_path)
+        self._run_collect(adapter, limit, recruitment_areas, known_path, split_every)
 
     def _run_collect(
         self,
@@ -503,12 +555,14 @@ class AppWindow(ctk.CTk):
         limit: int,
         recruitment_areas: list[dict[str, str]] | None = None,
         known_list_path: Path | None = None,
+        csv_rows_per_file: int = 0,
     ) -> None:
         page = self._browser.pick_page(getattr(adapter, "list_url_hint", "")) or self._browser.page
         if page is None:
             self._append_log("ブラウザが閉じられています。再度 [開く] してください。")
             self._is_collecting = False
             self._set_collecting(False)
+            self._stop_elapsed_timer()
             return
 
         scheduler = TkScheduler(self)
@@ -519,10 +573,14 @@ class AppWindow(ctk.CTk):
                 self._append_log(f"収集が完了しました（{count} 件）。")
             elif not stopped:
                 self._append_log("収集を終了しました（データなしまたはエラー）。")
+            if self._collect_started_at is not None:
+                elapsed = time.monotonic() - self._collect_started_at
+                self._append_log(f"収集時間: {self._format_elapsed(elapsed)}")
             self._orchestrator = None
             self._is_collecting = False
             self._set_collecting(False)
             self._stop_rest_countdown()
+            self._stop_elapsed_timer(keep_last=True)
             self._update_progress("idle", 0, None)
 
         orchestrator = Orchestrator(
@@ -541,6 +599,7 @@ class AppWindow(ctk.CTk):
             company_filter=CompanyFilter.from_config(self._config),
             recruitment_areas=recruitment_areas,
             known_list_path=known_list_path,
+            csv_rows_per_file=csv_rows_per_file,
         )
         self._orchestrator = orchestrator
         try:
@@ -551,8 +610,7 @@ class AppWindow(ctk.CTk):
             self._orchestrator = None
             self._is_collecting = False
             self._set_collecting(False)
-
-    def _on_stop(self) -> None:
+            self._stop_elapsed_timer()
         if self._orchestrator:
             self._orchestrator.request_stop()
             self._stop_rest_countdown()
@@ -560,6 +618,7 @@ class AppWindow(ctk.CTk):
 
     def _on_close(self) -> None:
         self._stop_rest_countdown()
+        self._stop_elapsed_timer()
         if self._orchestrator:
             self._orchestrator.request_stop()
         self._browser.close()
