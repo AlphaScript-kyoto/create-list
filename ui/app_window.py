@@ -611,6 +611,8 @@ class AppWindow(ctk.CTk):
             self._is_collecting = False
             self._set_collecting(False)
             self._stop_elapsed_timer()
+
+    def _on_stop(self) -> None:
         if self._orchestrator:
             self._orchestrator.request_stop()
             self._stop_rest_countdown()
