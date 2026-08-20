@@ -136,13 +136,13 @@ class AppWindow(ctk.CTk):
         self._known_enabled_var = ctk.BooleanVar(value=known_default and known_path.is_file())
         self._known_check = ctk.CTkCheckBox(
             top,
-            text="実装済みリストと重複する会社は保存しない",
+            text="実装済みリストで重複を除き、新規はリストへ追加",
             variable=self._known_enabled_var,
         )
         self._known_check.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
         ctk.CTkLabel(
             top,
-            text="電話番号で照合します（社名の表記が違っても、同じ番号なら既出とみなします）。既定ファイルは output/現状のmplist/実装済みリスト.csv です。",
+            text="既出（同じ電話番号）は output の CSV に出しません。新規だけ CSV に保存し、同じ内容を実装済みリストの末尾にも足します。",
             text_color="gray",
             wraplength=520,
             justify="left",

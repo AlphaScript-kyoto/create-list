@@ -6,11 +6,12 @@ import csv
 import hashlib
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from collector.csv_schema import company_key, normalize_text
-from collector.jp_phone import phone_digits
+from collector.jp_phone import format_jp_phone, phone_digits
 
 LogFn = Callable[[str], None]
 
@@ -47,6 +48,25 @@ class KnownList:
         if ident is None:
             return False
         return _hash_key(ident[0] + "\t" + ident[1]) in self.name_keys
+
+    def append_new(self, row: dict[str, str]) -> None:
+        """未登録の 1 件を実装済みリストの末尾に足し、照合用の記憶も更新する。"""
+        if not self.source_path:
+            raise FileNotFoundError("実装済みリストのパスがありません")
+        fields = _master_fields(row)
+        _add_record(self, fields[:4], None)
+        _ensure_trailing_newline(self.source_path)
+        with self.source_path.open("a", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+            writer.writerow(fields)
+
+    def refresh_index(self) -> None:
+        """追記後のファイル時刻に合わせて索引を書き直す。"""
+        if not self.source_path or not self.source_path.is_file():
+            return
+        stat = self.source_path.stat()
+        index_path = self.source_path.with_suffix(self.source_path.suffix + ".known_index")
+        self._write_index(index_path, stat.st_mtime_ns, stat.st_size)
 
     @classmethod
     def load(cls, path: Path, log: LogFn | None = None) -> "KnownList":
@@ -138,6 +158,33 @@ class KnownList:
                 if log and i % 500000 == 0:
                     log(f"  実装済みリストを読み込み中… {i:,} 行")
         return known
+
+
+def _master_fields(row: dict[str, str]) -> list[str]:
+    name = (
+        row.get("企業名") or row.get("社名") or row.get("会社名") or row.get("店名") or ""
+    ).strip()
+    postal = (row.get("郵便番号") or "").strip()
+    address = (row.get("住所") or row.get("本社所在地") or row.get("所在地") or "").strip()
+    phone = format_jp_phone(
+        row.get("電話番号") or row.get("企業代表番号") or row.get("専用電話番号") or ""
+    )
+    raw_date = (row.get("取得日時") or "").strip()
+    date = raw_date.split()[0] if raw_date else datetime.now().strftime("%Y/%m/%d")
+    if len(date) > 10:
+        date = date[:10]
+    return [name, postal, address, phone, date]
+
+
+def _ensure_trailing_newline(path: Path) -> None:
+    with path.open("rb+") as handle:
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            return
+        handle.seek(-1, 2)
+        last = handle.read(1)
+        if last not in (b"\n", b"\r"):
+            handle.write(b"\r\n")
 
 
 def _header_map(row: list[str]) -> dict[str, int] | None:

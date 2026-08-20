@@ -103,6 +103,7 @@ class Orchestrator:
         self._skipped_duplicates = 0
         self._skipped_filtered = 0
         self._skipped_known = 0
+        self._appended_known = 0
 
     @property
     def collected_count(self) -> int:
@@ -257,6 +258,7 @@ class Orchestrator:
         self._skipped_duplicates = 0
         self._skipped_filtered = 0
         self._skipped_known = 0
+        self._appended_known = 0
         columns = self._adapter.csv_columns()
         extra_columns = self._adapter.extra_columns()
         if columns is None:
@@ -331,6 +333,12 @@ class Orchestrator:
                     self._writer.append(row)
                     self._collected += 1
                     self._csv_path = self._writer.file_path
+                    if self._known_list:
+                        try:
+                            self._known_list.append_new(row)
+                            self._appended_known += 1
+                        except Exception as exc:
+                            self._log(f"実装済みリストへの追記に失敗: {exc}")
                     self._log(f"[{index}/{len(self._urls)}] {name}")
                     self._progress("detail", self._collected, self._progress_total())
         except Exception as exc:
@@ -427,6 +435,16 @@ class Orchestrator:
                 )
             if self._skipped_known:
                 self._log(f"実装済みリストと重複: {self._skipped_known} 件")
+            if self._appended_known:
+                try:
+                    assert self._known_list is not None
+                    self._known_list.refresh_index()
+                except Exception as exc:
+                    self._log(f"実装済みリストの索引更新に失敗（次回読み込み時に作り直します）: {exc}")
+                self._log(
+                    f"実装済みリストに今回の新規 {self._appended_known} 件を追記しました"
+                    f"（{self._known_list_path}）"
+                )
             if self._skipped_filtered:
                 self._log(f"フィルタでスキップ: {self._skipped_filtered} 件")
             logger.info("Saved CSV: %s", csv_path)
