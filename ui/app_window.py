@@ -63,8 +63,8 @@ class AppWindow(ctk.CTk):
         self._selected_areas: list[tuple[str, str]] = []
 
         self.title("半手動リスト収集ツール")
-        self.geometry("680x1000")
-        self.minsize(640, 860)
+        self.geometry("700x780")
+        self.minsize(660, 700)
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
@@ -145,47 +145,18 @@ class AppWindow(ctk.CTk):
         )
         self._area_clear_btn.pack(side="left", padx=(12, 0))
 
-        self._area_list_frame = ctk.CTkScrollableFrame(top, height=88, width=520)
-        self._area_list_frame.grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        self._area_list_frame = ctk.CTkScrollableFrame(top, height=80, width=520)
+        self._area_list_frame.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
         self._area_empty_label = ctk.CTkLabel(
             self._area_list_frame,
             text="（まだ選んでいません）",
             text_color="gray",
         )
         self._area_empty_label.pack(anchor="w", padx=4, pady=4)
-
-        ctk.CTkLabel(
-            top,
-            text="県・市を選んで [追加] を押すと、複数の募集地を登録できます。市は未指定でも追加でき（県一致）、どれか1つ一致すれば CSV に保存します。",
-            text_color="gray",
-            wraplength=520,
-            justify="left",
-            anchor="w",
-        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         self._on_area_toggle()
 
-        known_path = self._known_list_path()
-        ctk.CTkLabel(
-            top,
-            text="CSV は全サイト共通です。090・080・070 は出さず、実装済みリストに無い会社だけ保存します（新規はリストへ追記）。",
-            text_color="gray",
-            wraplength=520,
-            justify="left",
-            anchor="w",
-        ).grid(row=9, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
-        if known_path.is_file():
-            status = f"実装済みリスト: {known_path.name} を照合します"
-            color = "#166534"
-        else:
-            status = "実装済みリストが見つかりません（携帯番号の除外だけ行います）"
-            color = "#b45309"
-        self._known_status_label = ctk.CTkLabel(
-            top, text=status, text_color=color, wraplength=520, justify="left", anchor="w"
-        )
-        self._known_status_label.grid(row=10, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
-
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=12, pady=4)
+        btn_frame.pack(fill="x", padx=12, pady=(0, 4))
         self._open_btn = ctk.CTkButton(btn_frame, text="開く", width=100, command=self._on_open)
         self._open_btn.pack(side="left", padx=6)
         self._collect_btn = ctk.CTkButton(btn_frame, text="収集開始", width=100, command=self._on_collect)
@@ -195,48 +166,48 @@ class AppWindow(ctk.CTk):
         )
         self._stop_btn.pack(side="left", padx=6)
 
-        self._progress_label = ctk.CTkLabel(self, text="待機中")
-        self._progress_label.pack(anchor="w", padx=16, pady=(8, 0))
-
-        self._elapsed_label = ctk.CTkLabel(self, text="経過時間: —")
-        self._elapsed_label.pack(anchor="w", padx=16, pady=(2, 0))
+        status = ctk.CTkFrame(self, fg_color="transparent")
+        status.pack(fill="x", padx=16, pady=(4, 0))
+        self._progress_label = ctk.CTkLabel(status, text="待機中")
+        self._progress_label.pack(side="left")
+        self._elapsed_label = ctk.CTkLabel(status, text="経過時間: —")
+        self._elapsed_label.pack(side="left", padx=(16, 0))
 
         self._rest_label = ctk.CTkLabel(self, text="", text_color="#f59e0b")
         self._rest_label.pack(anchor="w", padx=16, pady=(2, 0))
-
         self._browser_status_label = ctk.CTkLabel(self, text="ブラウザ: 未接続", text_color="gray")
-        self._browser_status_label.pack(anchor="w", padx=16, pady=(2, 0))
-
-        ctk.CTkLabel(self, text="ログ").pack(anchor="w", padx=16, pady=(8, 0))
-        self._log_box = ctk.CTkTextbox(self, height=180)
-        self._log_box.pack(fill="both", expand=True, padx=12, pady=(4, 8))
-        self._log_box.configure(state="disabled")
+        self._browser_status_label.pack(anchor="w", padx=16, pady=(0, 4))
 
         notice_frame = ctk.CTkFrame(self)
-        notice_frame.pack(fill="x", padx=12, pady=(0, 12))
+        notice_frame.pack(fill="x", padx=12, pady=(0, 6))
         ctk.CTkLabel(
             notice_frame,
             text="注意事項",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#b45309",
-        ).pack(anchor="w", padx=12, pady=(10, 4))
+        ).pack(anchor="w", padx=12, pady=(8, 2))
         ctk.CTkLabel(
             notice_frame,
             text=(
-                "短時間に大量のアクセスを行うと、アクセス先のサイト側でアクセス制限やブロックされる恐れがあります。\n"
-                "なお、本機能のアクセスには、ご利用者様ご自身のIPアドレスが使用されます。"
-                "そのため、過度なアクセスを行った場合、該当サイトへ通常通りアクセスできなくなる可能性があります。\n"
+                "短時間に大量のアクセスを行うと、アクセス先のサイト側でアクセス制限やブロックされる恐れがあります。"
+                "本機能のアクセスにはご利用者様ご自身のIPアドレスが使用されるため、過度なアクセスを行った場合、"
+                "該当サイトへ通常通りアクセスできなくなる可能性があります。"
                 "本機能のご利用により発生したアクセス制限、ブロック、その他のトラブルにつきましては、"
-                "ツール制作者側では責任を負いかねますので、予めご了承ください。\n"
+                "ツール制作者側では責任を負いかねますので、予めご了承ください。"
                 "ご利用の際は、ご利用者様ご自身の責任において、アクセス先サイトに過度な負荷をかけないよう、"
                 "節度を持ってご利用くださいますようお願いいたします。"
             ),
-            font=ctk.CTkFont(size=12),
-            text_color="#6b7280",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
             justify="left",
-            wraplength=620,
+            wraplength=640,
             anchor="w",
-        ).pack(fill="x", padx=12, pady=(0, 12))
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        ctk.CTkLabel(self, text="ログ").pack(anchor="w", padx=16, pady=(2, 0))
+        self._log_box = ctk.CTkTextbox(self, height=140)
+        self._log_box.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+        self._log_box.configure(state="disabled")
 
         self._append_log("半手動リスト収集ツールを起動しました。")
         self._append_log("CSV には 090/080/070 の携帯電話と、実装済みリストの既出は出しません。")
