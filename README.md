@@ -52,7 +52,7 @@ py -3 main.py
    - リクナビNEXT: URL に `job_search`
    - バイトル: URL に `jlist`
    - 食べログ: URL に `rstLst`
-     - 電話番号がない店舗は CSV に入れません
+     - 電話番号がない店舗、および 090・080・070 の携帯電話は CSV に入れません
      - 住所は **郵便番号**（`601-8017`）と **住所** に分けます
      - ニューオープン一覧の **オープン日** も保存します（例: `オープン日　2026/9/8`）
      - 列名は他サイトと同じ（企業名・郵便番号・住所・電話番号…）です
@@ -79,7 +79,7 @@ py -3 scripts\verify_governor.py
 | 企業名 | ○ | 店名も含みます |
 | 郵便番号 | △ | サイトに無い場合は空欄 |
 | 住所 | ○ | 郵便番号は除いた本文 |
-| 電話番号 | ○ | 食べログは電話番号なしの店舗を保存しません |
+| 電話番号 | ○ | 電話なし、および 090・080・070 の携帯電話は保存しません |
 | メールアドレス | △ | 公開されていないことが多いです |
 | 担当者名 | △ | リクナビNEXT は代表者名で代用することがあります |
 | 掲載サイト | ○ | リクナビNEXT / バイトル / 食べログ |
@@ -95,6 +95,13 @@ py -3 scripts\fix_tabelog_open_date.py
 ```
 
 元ファイルは `output/tabelog_full_....csv.bak` に残します。
+
+すでに出した CSV から携帯電話行だけ除く場合:
+
+```powershell
+py -3 scripts\filter_mobile_phones.py
+```
+
 - URL キャッシュ: `output/{サイトID}_urls_YYYYMMDD_HHMMSS.txt`
 - ブラウザプロファイル: `output/.browser_profile/chrome/`（本体 Chrome と隔離）
 - ログ: `logs/app.log`

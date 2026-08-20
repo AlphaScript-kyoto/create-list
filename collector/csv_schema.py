@@ -18,6 +18,7 @@ COMMON_COLUMNS = [
 
 _POSTAL_HEAD = re.compile(r"^〒?\s*(\d{3})-?(\d{4})")
 _EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_MOBILE_PREFIXES = ("090", "080", "070")
 
 
 def csv_columns(*extra: str) -> list[str]:
@@ -50,6 +51,12 @@ def split_postal_address(address: str, postal_hint: str = "") -> tuple[str, str]
 def extract_email(text: str) -> str:
     match = _EMAIL_PATTERN.search(text or "")
     return match.group(0) if match else ""
+
+
+def is_mobile_phone(phone: str) -> bool:
+    """090 / 080 / 070 で始まる携帯電話。075 などの市外局番は対象外。"""
+    digits = re.sub(r"\D", "", phone or "")
+    return digits.startswith(_MOBILE_PREFIXES)
 
 
 def build_row(

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from adapters.base import SiteAdapter
-from collector.csv_schema import COMMON_COLUMNS
+from collector.csv_schema import COMMON_COLUMNS, is_mobile_phone
 from collector.csv_writer import CsvWriter
 from collector.governor import Governor
 
@@ -262,6 +262,10 @@ class Orchestrator:
             if not skip_reason and self._recruitment_area:
                 if not self._match_recruitment_area(row):
                     skip_reason = "住所が指定した県・市と一致しない"
+            if not skip_reason:
+                phone = row.get("電話番号") or row.get("企業代表番号") or row.get("専用電話番号") or ""
+                if is_mobile_phone(phone):
+                    skip_reason = "携帯電話番号（090/080/070）のため除外"
             if skip_reason:
                 self._skipped_filtered += 1
                 self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{skip_reason}）")
