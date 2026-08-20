@@ -6,6 +6,7 @@ from pathlib import Path
 
 from adapters.baitoru import BaitoruAdapter
 from adapters.base import SiteAdapter
+from adapters.ekiten import EkitenAdapter
 from adapters.rikunabi_next import RikunabiNextAdapter
 from adapters.site_loader import load_sites_from_json
 from adapters.tabelog import TabelogAdapter
@@ -18,6 +19,7 @@ _BUILTIN_ADAPTERS: list[type[SiteAdapter]] = [
     RikunabiNextAdapter,
     BaitoruAdapter,
     TabelogAdapter,
+    EkitenAdapter,
 ]
 
 
