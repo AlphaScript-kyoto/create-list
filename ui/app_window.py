@@ -63,8 +63,8 @@ class AppWindow(ctk.CTk):
         self._selected_areas: list[tuple[str, str]] = []
 
         self.title("半手動リスト収集ツール")
-        self.geometry("700x780")
-        self.minsize(660, 700)
+        self.geometry("700x720")
+        self.minsize(520, 420)
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
@@ -78,8 +78,12 @@ class AppWindow(ctk.CTk):
     def _build_ui(self) -> None:
         pad = {"padx": 12, "pady": 6}
 
-        top = ctk.CTkFrame(self)
-        top.pack(fill="x", padx=12, pady=12)
+        self._scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self._scroll.pack(fill="both", expand=True)
+        root = self._scroll
+
+        top = ctk.CTkFrame(root)
+        top.pack(fill="x", padx=8, pady=(8, 8))
 
         ctk.CTkLabel(top, text="収集サイト:").grid(row=0, column=0, sticky="w", **pad)
         names = list(self._adapter_map.keys())
@@ -155,8 +159,8 @@ class AppWindow(ctk.CTk):
         self._area_empty_label.pack(anchor="w", padx=4, pady=4)
         self._on_area_toggle()
 
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=12, pady=(0, 4))
+        btn_frame = ctk.CTkFrame(root, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=8, pady=(0, 4))
         self._open_btn = ctk.CTkButton(btn_frame, text="開く", width=100, command=self._on_open)
         self._open_btn.pack(side="left", padx=6)
         self._collect_btn = ctk.CTkButton(btn_frame, text="収集開始", width=100, command=self._on_collect)
@@ -166,27 +170,27 @@ class AppWindow(ctk.CTk):
         )
         self._stop_btn.pack(side="left", padx=6)
 
-        status = ctk.CTkFrame(self, fg_color="transparent")
-        status.pack(fill="x", padx=16, pady=(4, 0))
+        status = ctk.CTkFrame(root, fg_color="transparent")
+        status.pack(fill="x", padx=12, pady=(4, 0))
         self._progress_label = ctk.CTkLabel(status, text="待機中")
         self._progress_label.pack(side="left")
         self._elapsed_label = ctk.CTkLabel(status, text="経過時間: —")
         self._elapsed_label.pack(side="left", padx=(16, 0))
 
-        self._rest_label = ctk.CTkLabel(self, text="", text_color="#f59e0b")
-        self._rest_label.pack(anchor="w", padx=16, pady=(2, 0))
-        self._browser_status_label = ctk.CTkLabel(self, text="ブラウザ: 未接続", text_color="gray")
-        self._browser_status_label.pack(anchor="w", padx=16, pady=(0, 4))
+        self._rest_label = ctk.CTkLabel(root, text="", text_color="#f59e0b")
+        self._rest_label.pack(anchor="w", padx=12, pady=(2, 0))
+        self._browser_status_label = ctk.CTkLabel(root, text="ブラウザ: 未接続", text_color="gray")
+        self._browser_status_label.pack(anchor="w", padx=12, pady=(0, 4))
 
-        notice_frame = ctk.CTkFrame(self)
-        notice_frame.pack(fill="x", padx=12, pady=(0, 6))
+        notice_frame = ctk.CTkFrame(root)
+        notice_frame.pack(fill="x", padx=8, pady=(0, 6))
         ctk.CTkLabel(
             notice_frame,
             text="注意事項",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#b45309",
         ).pack(anchor="w", padx=12, pady=(8, 2))
-        ctk.CTkLabel(
+        self._notice_label = ctk.CTkLabel(
             notice_frame,
             text=(
                 "短時間に大量のアクセスを行うと、アクセス先のサイト側でアクセス制限やブロックされる恐れがあります。"
@@ -200,14 +204,16 @@ class AppWindow(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#9ca3af",
             justify="left",
-            wraplength=640,
+            wraplength=620,
             anchor="w",
-        ).pack(fill="x", padx=12, pady=(0, 8))
+        )
+        self._notice_label.pack(fill="x", padx=12, pady=(0, 8))
 
-        ctk.CTkLabel(self, text="ログ").pack(anchor="w", padx=16, pady=(2, 0))
-        self._log_box = ctk.CTkTextbox(self, height=140)
-        self._log_box.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+        ctk.CTkLabel(root, text="ログ").pack(anchor="w", padx=12, pady=(2, 0))
+        self._log_box = ctk.CTkTextbox(root, height=180)
+        self._log_box.pack(fill="x", padx=8, pady=(4, 12))
         self._log_box.configure(state="disabled")
+        self.bind("<Configure>", self._on_window_configure)
 
         self._append_log("半手動リスト収集ツールを起動しました。")
         self._append_log("CSV には 090/080/070 の携帯電話と、実装済みリストの既出は出しません。")
@@ -218,6 +224,12 @@ class AppWindow(ctk.CTk):
                 "実装済みリストが見つかりません。"
                 "output/現状のmplist/実装済みリスト.csv を置くと、未登録だけを CSV にできます。"
             )
+
+    def _on_window_configure(self, event) -> None:
+        if event.widget is not self:
+            return
+        wrap = max(320, event.width - 80)
+        self._notice_label.configure(wraplength=wrap)
 
     def _append_log(self, message: str) -> None:
         line = timestamp_log(message) + "\n"
