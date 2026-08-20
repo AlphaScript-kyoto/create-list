@@ -68,7 +68,7 @@ class Orchestrator:
         flush_every: int = 5,
         scheduler: StepScheduler | None = None,
         company_filter=None,
-        recruitment_area: dict[str, str] | None = None,
+        recruitment_areas: list[dict[str, str]] | None = None,
         known_list_path: Path | None = None,
     ) -> None:
         self._adapter = adapter
@@ -84,7 +84,7 @@ class Orchestrator:
         self._flush_every = flush_every
         self._scheduler = scheduler or ImmediateScheduler()
         self._company_filter = company_filter
-        self._recruitment_area = dict(recruitment_area or {})
+        self._recruitment_areas = list(recruitment_areas or [])
         self._known_list_path = Path(known_list_path) if known_list_path else None
         self._known_list: KnownList | None = None
         if company_filter is not None:
@@ -247,11 +247,12 @@ class Orchestrator:
                 f"  中小フィルタ: 従業員数上限 {emp_txt}、"
                 f"会社名キーワード {len(self._company_filter.exclude_name_keywords)} 件"
             )
-        if self._recruitment_area:
-            pref = self._recruitment_area.get("募集県", "")
-            city = self._recruitment_area.get("募集市", "")
-            area_txt = f"{pref} {city}".strip()
-            self._log(f"  住所フィルタ: 「{area_txt}」に一致するものだけ保存します")
+        if self._recruitment_areas:
+            labels = [
+                f"{area.get('募集県', '')} {area.get('募集市', '')}".strip()
+                for area in self._recruitment_areas
+            ]
+            self._log(f"  住所フィルタ: {' / '.join(labels)} のいずれかに一致するものだけ保存します")
         self._log("  CSV ルール: 090/080/070 は出さない／実装済みは出さない（全サイト共通）")
         self._detail_index = 0
         self._collected = 0
@@ -304,7 +305,7 @@ class Orchestrator:
             skip_reason = row.pop("_skip_reason", "") or ""
             if not skip_reason and self._company_filter:
                 skip_reason = self._company_filter.skip_reason(row) or ""
-            if not skip_reason and self._recruitment_area:
+            if not skip_reason and self._recruitment_areas:
                 if not self._match_recruitment_area(row):
                     skip_reason = "住所が指定した県・市と一致しない"
             if not skip_reason:
@@ -408,15 +409,18 @@ class Orchestrator:
         return len(self._urls)
 
     def _match_recruitment_area(self, row: dict[str, str]) -> bool:
-        """本社所在地（住所/所在地）に、指定された県・市の両方が含まれるか判定する。"""
-        pref = normalize_text(self._recruitment_area.get("募集県", ""))
-        city = normalize_text(self._recruitment_area.get("募集市", ""))
+        """住所が、選んだ県・市のどれかと一致するか判定する。"""
         address = normalize_text(
             row.get("住所") or row.get("本社所在地") or row.get("所在地") or ""
         )
-        if not pref or not city or not address:
+        if not address or not self._recruitment_areas:
             return False
-        return pref in address and city in address
+        for area in self._recruitment_areas:
+            pref = normalize_text(area.get("募集県", ""))
+            city = normalize_text(area.get("募集市", ""))
+            if pref and city and pref in address and city in address:
+                return True
+        return False
 
     def _save_url_cache(self) -> Path:
         self._output_dir.mkdir(parents=True, exist_ok=True)

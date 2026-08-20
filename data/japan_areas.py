@@ -283,3 +283,11 @@ def city_choices(prefecture: str) -> list[str]:
 def is_placeholder(value: str) -> bool:
     text = (value or "").strip()
     return not text or text.startswith("（")
+
+
+def format_area_label(prefecture: str, city: str) -> str:
+    return f"{prefecture} {city}".strip()
+
+
+def area_key(prefecture: str, city: str) -> tuple[str, str]:
+    return (prefecture.strip(), city.strip())

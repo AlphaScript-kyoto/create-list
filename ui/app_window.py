@@ -21,7 +21,9 @@ from collector.tk_scheduler import TkScheduler
 from data.japan_areas import (
     CITY_NONE,
     PREF_NONE,
+    area_key,
     city_choices,
+    format_area_label,
     is_placeholder,
     prefecture_choices,
 )
@@ -56,10 +58,11 @@ class AppWindow(ctk.CTk):
         self._is_collecting = False
         self._rest_after_id: str | None = None
         self._rest_end_time: float | None = None
+        self._selected_areas: list[tuple[str, str]] = []
 
         self.title("半手動リスト収集ツール")
-        self.geometry("680x900")
-        self.minsize(640, 780)
+        self.geometry("680x960")
+        self.minsize(640, 820)
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
@@ -121,14 +124,36 @@ class AppWindow(ctk.CTk):
         self._city_combo = ctk.CTkComboBox(area_frame, values=city_choices(""), width=180)
         self._city_combo.set(CITY_NONE)
         self._city_combo.pack(side="left")
+        self._area_add_btn = ctk.CTkButton(
+            area_frame, text="追加", width=60, command=self._on_area_add
+        )
+        self._area_add_btn.pack(side="left", padx=(12, 0))
+
+        list_header = ctk.CTkFrame(top, fg_color="transparent")
+        list_header.grid(row=5, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        ctk.CTkLabel(list_header, text="選んだ募集地:").pack(side="left")
+        self._area_clear_btn = ctk.CTkButton(
+            list_header, text="すべて解除", width=90, command=self._on_area_clear, height=24
+        )
+        self._area_clear_btn.pack(side="left", padx=(12, 0))
+
+        self._area_list_frame = ctk.CTkScrollableFrame(top, height=88, width=520)
+        self._area_list_frame.grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        self._area_empty_label = ctk.CTkLabel(
+            self._area_list_frame,
+            text="（まだ選んでいません）",
+            text_color="gray",
+        )
+        self._area_empty_label.pack(anchor="w", padx=4, pady=4)
+
         ctk.CTkLabel(
             top,
-            text="有効時は、本社所在地・所在地・住所に選択した県・市が含まれるものだけをCSVに保存します。町村は手入力もできます。",
+            text="県・市を選んで [追加] を押すと、複数の募集地を登録できます。住所にその県・市が含まれるものだけ CSV に保存します（どれか1つ一致すれば OK）。",
             text_color="gray",
             wraplength=520,
             justify="left",
             anchor="w",
-        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         self._on_area_toggle()
 
         known_path = self._known_list_path()
@@ -139,7 +164,7 @@ class AppWindow(ctk.CTk):
             wraplength=520,
             justify="left",
             anchor="w",
-        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         if known_path.is_file():
             status = f"実装済みリスト: {known_path.name} を照合します"
             color = "#166534"
@@ -149,7 +174,7 @@ class AppWindow(ctk.CTk):
         self._known_status_label = ctk.CTkLabel(
             top, text=status, text_color=color, wraplength=520, justify="left", anchor="w"
         )
-        self._known_status_label.grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        self._known_status_label.grid(row=9, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=4)
@@ -281,6 +306,8 @@ class AppWindow(ctk.CTk):
             if collecting:
                 self._pref_combo.configure(state="disabled")
                 self._city_combo.configure(state="disabled")
+                self._area_add_btn.configure(state="disabled")
+                self._area_clear_btn.configure(state="disabled")
             else:
                 self._on_area_toggle()
 
@@ -291,6 +318,8 @@ class AppWindow(ctk.CTk):
         state = "normal" if enabled else "disabled"
         self._pref_combo.configure(state=state)
         self._city_combo.configure(state=state)
+        self._area_add_btn.configure(state=state)
+        self._area_clear_btn.configure(state=state)
 
     def _on_pref_change(self, value: str = "") -> None:
         prefecture = value or self._pref_combo.get()
@@ -298,15 +327,66 @@ class AppWindow(ctk.CTk):
         self._city_combo.configure(values=choices)
         self._city_combo.set(CITY_NONE)
 
-    def _get_recruitment_area(self) -> dict[str, str] | None:
-        """有効時は募集地フィルタ条件。無効時は None。入力不足なら空 dict。"""
-        if not self._area_enabled_var.get():
-            return None
+    def _refresh_area_list_ui(self) -> None:
+        for child in self._area_list_frame.winfo_children():
+            child.destroy()
+        if not self._selected_areas:
+            self._area_empty_label = ctk.CTkLabel(
+                self._area_list_frame,
+                text="（まだ選んでいません）",
+                text_color="gray",
+            )
+            self._area_empty_label.pack(anchor="w", padx=4, pady=4)
+            return
+        for index, (prefecture, city) in enumerate(self._selected_areas):
+            row = ctk.CTkFrame(self._area_list_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            ctk.CTkLabel(row, text=format_area_label(prefecture, city)).pack(side="left", padx=4)
+            enabled = bool(self._area_enabled_var.get()) and not self._is_collecting
+            ctk.CTkButton(
+                row,
+                text="削除",
+                width=56,
+                height=24,
+                state="normal" if enabled else "disabled",
+                command=lambda idx=index: self._on_area_remove(idx),
+            ).pack(side="right", padx=4)
+
+    def _on_area_add(self) -> None:
         prefecture = self._pref_combo.get().strip()
         city = self._city_combo.get().strip()
         if is_placeholder(prefecture) or is_placeholder(city):
-            return {}
-        return {"募集県": prefecture, "募集市": city}
+            messagebox.showwarning(
+                "確認",
+                "県と市を選んでから [追加] を押してください。\n"
+                "リストにない町村は、市の欄に直接入力できます。",
+            )
+            return
+        key = area_key(prefecture, city)
+        if key in self._selected_areas:
+            messagebox.showinfo("確認", f"{format_area_label(*key)} はすでに追加されています。")
+            return
+        self._selected_areas.append(key)
+        self._refresh_area_list_ui()
+
+    def _on_area_remove(self, index: int) -> None:
+        if 0 <= index < len(self._selected_areas):
+            self._selected_areas.pop(index)
+            self._refresh_area_list_ui()
+
+    def _on_area_clear(self) -> None:
+        if not self._selected_areas:
+            return
+        self._selected_areas.clear()
+        self._refresh_area_list_ui()
+
+    def _get_recruitment_areas(self) -> list[dict[str, str]] | None:
+        """有効時は募集地フィルタ条件の一覧。無効時は None。未選択なら空 list。"""
+        if not self._area_enabled_var.get():
+            return None
+        if not self._selected_areas:
+            return []
+        return [{"募集県": pref, "募集市": city} for pref, city in self._selected_areas]
 
     def _known_list_path(self) -> Path:
         cfg = self._config.get("known_list") or {}
@@ -387,12 +467,12 @@ class AppWindow(ctk.CTk):
             messagebox.showwarning("確認", "先に [開く] でブラウザを起動してください。")
             return
 
-        recruitment_area = self._get_recruitment_area()
-        if recruitment_area is not None and not recruitment_area:
+        recruitment_areas = self._get_recruitment_areas()
+        if recruitment_areas is not None and not recruitment_areas:
             messagebox.showwarning(
                 "確認",
-                "募集地フィルタを有効にしています。県と市を選んでから収集を開始してください。\n"
-                "リストにない町村は、市の欄に直接入力できます。",
+                "募集地フィルタを有効にしています。\n"
+                "県・市を選んで [追加] し、1件以上登録してから収集を開始してください。",
             )
             return
 
@@ -413,13 +493,13 @@ class AppWindow(ctk.CTk):
             self._append_log(
                 "実装済みリストのファイルが無いので、今回は未登録判定なしです（090/080/070 は除外します）。"
             )
-        self._run_collect(adapter, limit, recruitment_area, known_path)
+        self._run_collect(adapter, limit, recruitment_areas, known_path)
 
     def _run_collect(
         self,
         adapter: SiteAdapter,
         limit: int,
-        recruitment_area: dict[str, str] | None = None,
+        recruitment_areas: list[dict[str, str]] | None = None,
         known_list_path: Path | None = None,
     ) -> None:
         page = self._browser.pick_page(getattr(adapter, "list_url_hint", "")) or self._browser.page
@@ -457,7 +537,7 @@ class AppWindow(ctk.CTk):
             flush_every=int(self._config.get("csv_flush_every", 5)),
             scheduler=scheduler,
             company_filter=CompanyFilter.from_config(self._config),
-            recruitment_area=recruitment_area,
+            recruitment_areas=recruitment_areas,
             known_list_path=known_list_path,
         )
         self._orchestrator = orchestrator
