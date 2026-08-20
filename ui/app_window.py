@@ -148,7 +148,7 @@ class AppWindow(ctk.CTk):
 
         ctk.CTkLabel(
             top,
-            text="県・市を選んで [追加] を押すと、複数の募集地を登録できます。住所にその県・市が含まれるものだけ CSV に保存します（どれか1つ一致すれば OK）。",
+            text="県・市を選んで [追加] を押すと、複数の募集地を登録できます。市は未指定でも追加でき（県一致）、どれか1つ一致すれば CSV に保存します。",
             text_color="gray",
             wraplength=520,
             justify="left",
@@ -355,13 +355,15 @@ class AppWindow(ctk.CTk):
     def _on_area_add(self) -> None:
         prefecture = self._pref_combo.get().strip()
         city = self._city_combo.get().strip()
-        if is_placeholder(prefecture) or is_placeholder(city):
+        if is_placeholder(prefecture):
             messagebox.showwarning(
                 "確認",
-                "県と市を選んでから [追加] を押してください。\n"
-                "リストにない町村は、市の欄に直接入力できます。",
+                "県を選んでから [追加] を押してください。\n"
+                "市は未指定でも追加できます。",
             )
             return
+        if is_placeholder(city):
+            city = ""
         key = area_key(prefecture, city)
         if key in self._selected_areas:
             messagebox.showinfo("確認", f"{format_area_label(*key)} はすでに追加されています。")

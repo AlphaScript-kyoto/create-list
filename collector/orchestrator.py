@@ -409,7 +409,7 @@ class Orchestrator:
         return len(self._urls)
 
     def _match_recruitment_area(self, row: dict[str, str]) -> bool:
-        """住所が、選んだ県・市のどれかと一致するか判定する。"""
+        """住所が、選んだ県・市（市未指定なら県だけ）のどれかと一致するか判定する。"""
         address = normalize_text(
             row.get("住所") or row.get("本社所在地") or row.get("所在地") or ""
         )
@@ -418,7 +418,9 @@ class Orchestrator:
         for area in self._recruitment_areas:
             pref = normalize_text(area.get("募集県", ""))
             city = normalize_text(area.get("募集市", ""))
-            if pref and city and pref in address and city in address:
+            if not pref or pref not in address:
+                continue
+            if not city or city in address:
                 return True
         return False
 
