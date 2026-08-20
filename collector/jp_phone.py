@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _DIGIT = re.compile(r"\D+")
 
@@ -308,8 +309,9 @@ _AREA_4 = frozenset(
 
 
 def phone_digits(phone: str) -> str:
-    """数字だけを取り出す。"""
-    return _DIGIT.sub("", phone or "")
+    """数字だけを取り出す。全角数字も半角にそろえる。"""
+    text = unicodedata.normalize("NFKC", phone or "")
+    return _DIGIT.sub("", text)
 
 
 def format_jp_phone(phone: str) -> str:

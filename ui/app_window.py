@@ -131,23 +131,25 @@ class AppWindow(ctk.CTk):
         ).grid(row=5, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
         self._on_area_toggle()
 
-        known_default = bool((self._config.get("known_list") or {}).get("enabled", True))
         known_path = self._known_list_path()
-        self._known_enabled_var = ctk.BooleanVar(value=known_default and known_path.is_file())
-        self._known_check = ctk.CTkCheckBox(
-            top,
-            text="実装済みリストで重複を除き、新規はリストへ追加",
-            variable=self._known_enabled_var,
-        )
-        self._known_check.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
         ctk.CTkLabel(
             top,
-            text="既出（同じ電話番号）は output の CSV に出しません。新規だけ CSV に保存し、同じ内容を実装済みリストの末尾にも足します。",
+            text="CSV は全サイト共通です。090・080・070 は出さず、実装済みリストに無い会社だけ保存します（新規はリストへ追記）。",
             text_color="gray",
             wraplength=520,
             justify="left",
             anchor="w",
-        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
+        if known_path.is_file():
+            status = f"実装済みリスト: {known_path.name} を照合します"
+            color = "#166534"
+        else:
+            status = "実装済みリストが見つかりません（携帯番号の除外だけ行います）"
+            color = "#b45309"
+        self._known_status_label = ctk.CTkLabel(
+            top, text=status, text_color=color, wraplength=520, justify="left", anchor="w"
+        )
+        self._known_status_label.grid(row=7, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 8))
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=12, pady=4)
@@ -201,12 +203,13 @@ class AppWindow(ctk.CTk):
         ).pack(fill="x", padx=12, pady=(0, 12))
 
         self._append_log("半手動リスト収集ツールを起動しました。")
+        self._append_log("CSV には 090/080/070 の携帯電話と、実装済みリストの既出は出しません。")
         if self._known_list_path().is_file():
             self._append_log(f"実装済みリストを検出: {self._known_list_path()}")
         else:
             self._append_log(
                 "実装済みリストが見つかりません。"
-                "output/現状のmplist/実装済みリスト.csv を置くと、収集時に重複を避けられます。"
+                "output/現状のmplist/実装済みリスト.csv を置くと、未登録だけを CSV にできます。"
             )
 
     def _append_log(self, message: str) -> None:
@@ -275,7 +278,6 @@ class AppWindow(ctk.CTk):
             self._collect_btn.configure(state=state_collect)
             self._stop_btn.configure(state=state_stop)
             self._area_check.configure(state=state_open)
-            self._known_check.configure(state=state_open)
             if collecting:
                 self._pref_combo.configure(state="disabled")
                 self._city_combo.configure(state="disabled")
@@ -406,15 +408,11 @@ class AppWindow(ctk.CTk):
         except Exception:
             pass
         self._append_log(f"収集対象タブ: {page.url}")
-        known_path = None
-        if self._known_enabled_var.get():
-            candidate = self._known_list_path()
-            if candidate.is_file():
-                known_path = candidate
-            else:
-                self._append_log(
-                    "実装済みリストのファイルが無いので、今回は照合なしで収集します。"
-                )
+        known_path = self._known_list_path() if self._known_list_path().is_file() else None
+        if known_path is None:
+            self._append_log(
+                "実装済みリストのファイルが無いので、今回は未登録判定なしです（090/080/070 は除外します）。"
+            )
         self._run_collect(adapter, limit, recruitment_area, known_path)
 
     def _run_collect(

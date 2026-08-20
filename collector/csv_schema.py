@@ -22,6 +22,7 @@ COMMON_COLUMNS = [
 _POSTAL_HEAD = re.compile(r"^〒?\s*(\d{3})-?(\d{4})")
 _EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _MOBILE_PREFIXES = ("090", "080", "070")
+PHONE_FIELD_KEYS = ("電話番号", "企業代表番号", "専用電話番号")
 
 
 def csv_columns(*extra: str) -> list[str]:
@@ -60,6 +61,24 @@ def is_mobile_phone(phone: str) -> bool:
     """090 / 080 / 070 で始まる携帯電話。075 などの市外局番は対象外。"""
     digits = phone_digits(phone)
     return digits.startswith(_MOBILE_PREFIXES)
+
+
+def row_phone(row: dict[str, str]) -> str:
+    for key in PHONE_FIELD_KEYS:
+        value = (row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def csv_skip_reason(row: dict[str, str], known_list: object | None = None) -> str:
+    """CSV に書いてはいけない行なら理由。既存サイト・今後追加するサイトも同じ。"""
+    if is_mobile_phone(row_phone(row)):
+        return "携帯電話番号（090/080/070）のため除外"
+    contains = getattr(known_list, "contains", None)
+    if callable(contains) and contains(row):
+        return "実装済みリストに既出"
+    return ""
 
 
 def normalize_text(value: str) -> str:

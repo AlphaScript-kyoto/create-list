@@ -13,7 +13,7 @@ from collector.csv_schema import (
     COMMON_COLUMNS,
     clean_contact_name,
     company_key,
-    is_mobile_phone,
+    csv_skip_reason,
     normalize_text,
 )
 from collector.csv_writer import CsvWriter
@@ -252,6 +252,7 @@ class Orchestrator:
             city = self._recruitment_area.get("募集市", "")
             area_txt = f"{pref} {city}".strip()
             self._log(f"  住所フィルタ: 「{area_txt}」に一致するものだけ保存します")
+        self._log("  CSV ルール: 090/080/070 は出さない／実装済みは出さない（全サイト共通）")
         self._detail_index = 0
         self._collected = 0
         self._seen_companies = set()
@@ -269,6 +270,7 @@ class Orchestrator:
             extra_columns=extra_columns,
             columns=columns,
             flush_every=self._flush_every,
+            known_list=self._known_list,
         )
         self._progress("detail", 0, len(self._urls))
         delay = self._governor.sample_page_delay()
@@ -306,11 +308,7 @@ class Orchestrator:
                 if not self._match_recruitment_area(row):
                     skip_reason = "住所が指定した県・市と一致しない"
             if not skip_reason:
-                phone = row.get("電話番号") or row.get("企業代表番号") or row.get("専用電話番号") or ""
-                if is_mobile_phone(phone):
-                    skip_reason = "携帯電話番号（090/080/070）のため除外"
-            if not skip_reason and self._known_list and self._known_list.contains(row):
-                skip_reason = "実装済みリストに既出"
+                skip_reason = csv_skip_reason(row, self._known_list)
             if skip_reason:
                 if skip_reason == "実装済みリストに既出":
                     self._skipped_known += 1
@@ -328,19 +326,27 @@ class Orchestrator:
                     )
                     self._progress("detail", self._collected, self._progress_total())
                 else:
-                    if dup_key:
-                        self._seen_companies.add(dup_key)
-                    self._writer.append(row)
-                    self._collected += 1
-                    self._csv_path = self._writer.file_path
-                    if self._known_list:
-                        try:
-                            self._known_list.append_new(row)
-                            self._appended_known += 1
-                        except Exception as exc:
-                            self._log(f"実装済みリストへの追記に失敗: {exc}")
-                    self._log(f"[{index}/{len(self._urls)}] {name}")
-                    self._progress("detail", self._collected, self._progress_total())
+                    blocked = self._writer.append(row)
+                    if blocked:
+                        if blocked == "実装済みリストに既出":
+                            self._skipped_known += 1
+                        else:
+                            self._skipped_filtered += 1
+                        self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{blocked}）")
+                        self._progress("detail", self._collected, self._progress_total())
+                    else:
+                        if dup_key:
+                            self._seen_companies.add(dup_key)
+                        self._collected += 1
+                        self._csv_path = self._writer.file_path
+                        if self._known_list:
+                            try:
+                                self._known_list.append_new(row)
+                                self._appended_known += 1
+                            except Exception as exc:
+                                self._log(f"実装済みリストへの追記に失敗: {exc}")
+                        self._log(f"[{index}/{len(self._urls)}] {name}")
+                        self._progress("detail", self._collected, self._progress_total())
         except Exception as exc:
             self._log(f"[{index}/{len(self._urls)}] エラー: {exc}")
 
