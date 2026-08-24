@@ -11,6 +11,9 @@ from collector.csv_schema import build_row, csv_columns, extract_email
 _JOBDETAIL_PATTERN = re.compile(r"/jobdetail/\d+")
 _PHONE_PATTERN = re.compile(r"0\d{1,3}[-−‒–—]?\d{1,4}[-−‒–—]?\d{3,4}")
 _PAGE_SUFFIX = re.compile(r"/page(\d+)/?$", re.I)
+# 一覧にも詳細にも大量に出る人材系の社名。詳細を開かず除外する（バイトルのみ）。
+_SKIP_COMPANY_NAMES = frozenset({"株式会社バイトレ", "バイトレ"})
+_SKIP_COMPANY_REASON = "株式会社バイトレ（一覧で除外）"
 
 
 def next_jlist_url(current: str) -> str | None:
@@ -29,11 +32,28 @@ def next_jlist_url(current: str) -> str | None:
     return urlunparse((parsed.scheme, parsed.netloc, new_path, "", parsed.query, ""))
 
 
+def _normalize_company_label(value: str) -> str:
+    return re.sub(r"[\s　]", "", (value or "").strip())
+
+
+def is_baitoru_skip_company(name: str) -> bool:
+    """株式会社バイトレ（表記ゆれ含む）なら True。"""
+    normalized = _normalize_company_label(name)
+    if not normalized:
+        return False
+    if normalized in _SKIP_COMPANY_NAMES:
+        return True
+    return "株式会社バイトレ" in normalized or normalized.endswith("バイトレ")
+
+
 class BaitoruAdapter(SiteAdapter):
     site_id = "baitoru"
     display_name = "バイトル"
     top_url = "https://www.baitoru.com/"
     list_url_hint = "/jlist/"
+
+    def __init__(self) -> None:
+        self.last_list_skip_count = 0
 
     def csv_columns(self) -> list[str] | None:
         return csv_columns()
@@ -64,29 +84,65 @@ class BaitoruAdapter(SiteAdapter):
     def extract_list_links(self, page) -> list[str]:
         page.wait_for_load_state("domcontentloaded")
         page.wait_for_timeout(800)
+        self.last_list_skip_count = 0
 
-        hrefs: list[str] = []
+        items: list[dict[str, str]] = []
         try:
-            hrefs = page.evaluate(
-                """() => Array.from(document.querySelectorAll('a[href]'))
-                    .map(a => a.href)
-                    .filter(h => h && h.includes('/jobdetail/'))"""
+            items = page.evaluate(
+                """() => {
+                    const out = [];
+                    const seen = new Set();
+                    const links = Array.from(document.querySelectorAll('a[href*="/jobdetail/"]'));
+                    for (const a of links) {
+                        const href = a.href || '';
+                        if (!href || seen.has(href)) continue;
+                        seen.add(href);
+                        let company = '';
+                        const card = a.closest('li, article, section, tr')
+                            || a.closest('div[class*="cassette"], div[class*="Cassette"], div[class*="job"]')
+                            || a.parentElement;
+                        if (card) {
+                            const named = card.querySelector(
+                                '[class*="companyName"], [class*="company-name"], [class*="CompanyName"],'
+                                + ' [class*="corpName"], [class*="company"]'
+                            );
+                            if (named) {
+                                company = (named.textContent || '').replace(/\\s+/g, ' ').trim();
+                            }
+                            if (!company) {
+                                const text = (card.innerText || '').replace(/\\s+/g, ' ').trim();
+                                const m = text.match(/株式会社\\s*バイトレ|バイトレ/);
+                                if (m) company = m[0];
+                            }
+                        }
+                        out.push({ href, company });
+                    }
+                    return out;
+                }"""
             )
         except Exception:
-            hrefs = []
+            items = []
 
         links: list[str] = []
         seen: set[str] = set()
-        for href in hrefs:
+        for item in items or []:
+            href = str((item or {}).get("href") or "")
+            company = str((item or {}).get("company") or "")
+            if not href:
+                continue
             full = urljoin(page.url, href)
             parsed = urlparse(full)
             match = _JOBDETAIL_PATTERN.search(parsed.path)
             if not match:
                 continue
             clean = f"{parsed.scheme}://{parsed.netloc}{match.group(0)}"
-            if clean not in seen:
-                seen.add(clean)
-                links.append(clean)
+            if clean in seen:
+                continue
+            seen.add(clean)
+            if is_baitoru_skip_company(company):
+                self.last_list_skip_count += 1
+                continue
+            links.append(clean)
         return links
 
     def go_next_page(self, page) -> bool:
@@ -136,7 +192,11 @@ class BaitoruAdapter(SiteAdapter):
             return False
         if page.url.rstrip("/") == previous_url.rstrip("/"):
             return False
-        return bool(self.extract_list_links(page))
+        # 除外後の件数が 0 でも、求人リンクがあれば次ページ到達とみなす
+        try:
+            return page.locator("a[href*='/jobdetail/']").count() > 0
+        except Exception:
+            return True
 
     def extract_detail(self, page, url: str) -> dict[str, str]:
         page.wait_for_load_state("domcontentloaded")
@@ -159,6 +219,12 @@ class BaitoruAdapter(SiteAdapter):
             contact=info.get("contact", ""),
         )
         row["従業員数"] = info.get("employees", "")
+        # 一覧で取りこぼした場合の保険（電話ダイアログは開かない／休憩カウントにも入れない）
+        if is_baitoru_skip_company(info.get("name", "")):
+            row["電話番号"] = ""
+            row["_skip_reason"] = _SKIP_COMPANY_REASON
+            row["_skip_governor"] = "1"
+            return row
         filter_obj = getattr(self, "_company_filter", None)
         skip_reason = filter_obj.skip_reason(row) if filter_obj else None
         if skip_reason:

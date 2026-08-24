@@ -208,9 +208,11 @@ class Orchestrator:
                 self._urls.append(url)
                 new_count += 1
 
+        skipped_list = int(getattr(self._adapter, "last_list_skip_count", 0) or 0)
+        skip_note = f" / 一覧除外 {skipped_list} 件" if skipped_list else ""
         self._log(
             f"  一覧 {self._scan_page_num} ページ目: +{new_count} 件"
-            f"（このページ {len(links)} 件 / 累計 {len(self._urls)} 件）"
+            f"（このページ {len(links)} 件 / 累計 {len(self._urls)} 件{skip_note}）"
         )
         self._progress("scan", len(self._urls), None)
 
@@ -301,6 +303,7 @@ class Orchestrator:
 
         url = self._urls[self._detail_index]
         index = self._detail_index + 1
+        skip_governor = False
 
         try:
             self._page.goto(url, wait_until="domcontentloaded")
@@ -315,6 +318,7 @@ class Orchestrator:
                 or ""
             )
             skip_reason = row.pop("_skip_reason", "") or ""
+            skip_governor = bool(row.pop("_skip_governor", ""))
             if not skip_reason and self._company_filter:
                 skip_reason = self._company_filter.skip_reason(row) or ""
             if not skip_reason and self._recruitment_areas:
@@ -330,6 +334,7 @@ class Orchestrator:
                 self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{skip_reason}）")
                 self._progress("detail", self._collected, self._progress_total())
             else:
+                skip_governor = False
                 dup_key = company_key(row)
                 if dup_key and dup_key in self._seen_companies:
                     self._skipped_duplicates += 1
@@ -364,6 +369,7 @@ class Orchestrator:
                         self._progress("detail", self._collected, self._progress_total())
         except Exception as exc:
             self._log(f"[{index}/{len(self._urls)}] エラー: {exc}")
+            skip_governor = False
 
         self._detail_index = index
 
@@ -377,6 +383,11 @@ class Orchestrator:
             return
 
         delay = self._governor.sample_page_delay()
+
+        # 一覧除外の保険スキップなどは、相手サーバーへの負荷が小さいので休憩カウントに入れない
+        if skip_governor:
+            self._scheduler.schedule(self._phase_detail_next, delay)
+            return
 
         continued, rest_sec = self._governor.after_item(lambda: self._stopped)
         if not continued:
