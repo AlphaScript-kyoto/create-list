@@ -233,6 +233,8 @@ class BaitoruAdapter(SiteAdapter):
             return row
 
         row["電話番号"] = self._extract_phone_from_dialog(page)
+        if not row["電話番号"]:
+            row["_skip_reason"] = "電話番号なし"
         return row
 
     def _extract_business_info(self, page) -> dict[str, str]:
