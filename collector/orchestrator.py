@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -70,6 +71,7 @@ class Orchestrator:
         company_filter=None,
         recruitment_areas: list[dict[str, str]] | None = None,
         known_list_path: Path | None = None,
+        known_list: KnownList | None = None,
         csv_rows_per_file: int = 0,
     ) -> None:
         self._adapter = adapter
@@ -88,7 +90,7 @@ class Orchestrator:
         self._company_filter = company_filter
         self._recruitment_areas = list(recruitment_areas or [])
         self._known_list_path = Path(known_list_path) if known_list_path else None
-        self._known_list: KnownList | None = None
+        self._known_list: KnownList | None = known_list
         if company_filter is not None:
             self._adapter.set_company_filter(company_filter)
 
@@ -115,6 +117,10 @@ class Orchestrator:
     def cached_url_count(self) -> int:
         return len(self._urls)
 
+    @property
+    def known_list(self) -> KnownList | None:
+        return self._known_list
+
     def request_stop(self) -> None:
         self._stopped = True
         self._rest_end()
@@ -131,29 +137,92 @@ class Orchestrator:
         if self._stopped:
             self._finish(None)
             return
+        if self._known_list is not None and self._known_list_path:
+            if self._known_list.matches_source_file(self._known_list_path):
+                self._log("実装済みリストはメモリ上のキャッシュを使います（増分だけ確認）…")
+                self._scheduler.schedule(self._phase_sync_known_cache, 0.05)
+                return
         if self._known_list_path:
             self._log(
                 "実装済みリストを読み込みます。"
-                "初回は索引づくりで少し時間がかかることがあります…"
+                "索引があれば高速、増えた分だけ足します（裏で読み込みます）…"
             )
             self._scheduler.schedule(self._phase_load_known, 0.15)
             return
         self._phase_validate()
 
+    def _phase_sync_known_cache(self) -> None:
+        if self._stopped:
+            self._finish(None)
+            return
+        assert self._known_list is not None
+
+        def work() -> None:
+            try:
+                assert self._known_list is not None
+                self._known_list.sync_from_disk(log=lambda msg: self._scheduler.schedule(
+                    lambda m=msg: self._log(m), 0
+                ))
+                err: Exception | None = None
+            except Exception as exc:
+                err = exc
+
+            def done() -> None:
+                if self._stopped:
+                    self._finish(None)
+                    return
+                if err is not None:
+                    self._log(f"実装済みリストの増分同期に失敗しました: {err}")
+                elif self._known_list is not None:
+                    self._log(
+                        f"実装済みリスト: 電話 {self._known_list.phone_count:,} 件と照合します"
+                    )
+                self._phase_validate()
+
+            self._scheduler.schedule(done, 0)
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _phase_load_known(self) -> None:
         if self._stopped:
             self._finish(None)
             return
-        try:
-            assert self._known_list_path is not None
-            self._known_list = KnownList.load(self._known_list_path, log=self._log)
-            self._log(
-                f"実装済みリスト: 電話 {self._known_list.phone_count:,} 件と照合します"
-            )
-        except Exception as exc:
-            self._known_list = None
-            self._log(f"実装済みリストを読めませんでした（照合なしで続行）: {exc}")
-        self._phase_validate()
+
+        path = self._known_list_path
+        assert path is not None
+        result: dict[str, object] = {"known": None, "error": None}
+
+        def work() -> None:
+            try:
+                result["known"] = KnownList.load(
+                    path,
+                    log=lambda msg: self._scheduler.schedule(
+                        lambda m=msg: self._log(m), 0
+                    ),
+                )
+            except Exception as exc:
+                result["error"] = exc
+
+            def done() -> None:
+                if self._stopped:
+                    self._finish(None)
+                    return
+                if result["error"] is not None:
+                    self._known_list = None
+                    self._log(
+                        f"実装済みリストを読めませんでした（照合なしで続行）: {result['error']}"
+                    )
+                else:
+                    self._known_list = result["known"]  # type: ignore[assignment]
+                    if self._known_list is not None:
+                        self._log(
+                            f"実装済みリスト: 電話 {self._known_list.phone_count:,} 件と照合します"
+                        )
+                self._phase_validate()
+
+            self._scheduler.schedule(done, 0)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def run(self) -> Path | None:
         """同期収集（CLI 検証向け）。"""
@@ -496,15 +565,32 @@ class Orchestrator:
             if self._skipped_known:
                 self._log(f"実装済みリストと重複: {self._skipped_known} 件")
             if self._appended_known:
-                try:
-                    assert self._known_list is not None
-                    self._known_list.refresh_index()
-                except Exception as exc:
-                    self._log(f"実装済みリストの索引更新に失敗（次回読み込み時に作り直します）: {exc}")
-                self._log(
-                    f"実装済みリストに今回の新規 {self._appended_known} 件を追記しました"
-                    f"（{self._known_list_path}）"
-                )
+                known = self._known_list
+                appended = self._appended_known
+                known_path = self._known_list_path
+
+                def refresh_work() -> None:
+                    try:
+                        assert known is not None
+                        known.refresh_index()
+                        err: Exception | None = None
+                    except Exception as exc:
+                        err = exc
+
+                    def done() -> None:
+                        if err is not None:
+                            self._log(
+                                "実装済みリストの索引更新に失敗"
+                                f"（次回読み込み時に作り直します）: {err}"
+                            )
+                        self._log(
+                            f"実装済みリストに今回の新規 {appended} 件を追記しました"
+                            f"（{known_path}）"
+                        )
+
+                    self._scheduler.schedule(done, 0)
+
+                threading.Thread(target=refresh_work, daemon=True).start()
             if self._skipped_filtered:
                 self._log(f"フィルタでスキップ: {self._skipped_filtered} 件")
             logger.info("Saved CSV: %s", csv_path)

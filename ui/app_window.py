@@ -16,6 +16,7 @@ from app_utils import timestamp_log
 from browser.controller import BrowserController
 from collector.company_filter import CompanyFilter
 from collector.governor import Governor
+from collector.known_list import KnownList
 from collector.orchestrator import Orchestrator
 from collector.tk_scheduler import TkScheduler
 from data.japan_areas import (
@@ -55,6 +56,7 @@ class AppWindow(ctk.CTk):
             profile_subdir=browser_cfg.get("profile_subdir", "chrome"),
         )
         self._orchestrator: Orchestrator | None = None
+        self._known_list_cache: KnownList | None = None
         self._is_collecting = False
         self._rest_after_id: str | None = None
         self._rest_end_time: float | None = None
@@ -553,6 +555,8 @@ class AppWindow(ctk.CTk):
         scheduler = TkScheduler(self)
 
         def on_finish(csv_path: Path | None, count: int) -> None:
+            if orchestrator.known_list is not None:
+                self._known_list_cache = orchestrator.known_list
             stopped = orchestrator.is_stopped()
             if csv_path and count > 0:
                 self._append_log(f"収集が完了しました（{count} 件）。")
@@ -567,6 +571,12 @@ class AppWindow(ctk.CTk):
             self._stop_rest_countdown()
             self._stop_elapsed_timer(keep_last=True)
             self._update_progress("idle", 0, None)
+
+        cached = self._known_list_cache
+        if cached is not None and known_list_path is not None:
+            if not cached.matches_source_file(known_list_path):
+                cached = None
+                self._known_list_cache = None
 
         orchestrator = Orchestrator(
             adapter=adapter,
@@ -584,6 +594,7 @@ class AppWindow(ctk.CTk):
             company_filter=CompanyFilter.from_config(self._config),
             recruitment_areas=recruitment_areas,
             known_list_path=known_list_path,
+            known_list=cached,
             csv_rows_per_file=csv_rows_per_file,
         )
         self._orchestrator = orchestrator
