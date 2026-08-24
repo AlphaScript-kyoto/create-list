@@ -110,9 +110,8 @@ class BaitoruAdapter(SiteAdapter):
                                 company = (named.textContent || '').replace(/\\s+/g, ' ').trim();
                             }
                             if (!company) {
-                                const text = (card.innerText || '').replace(/\\s+/g, ' ').trim();
-                                const m = text.match(/株式会社\\s*バイトレ|バイトレ/);
-                                if (m) company = m[0];
+                                // カード文言全体を渡し、一覧で大手キーワード判定できるようにする
+                                company = (card.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 240);
                             }
                         }
                         out.push({ href, company });
@@ -140,6 +139,10 @@ class BaitoruAdapter(SiteAdapter):
                 continue
             seen.add(clean)
             if is_baitoru_skip_company(company):
+                self.last_list_skip_count += 1
+                continue
+            filter_obj = getattr(self, "_company_filter", None)
+            if filter_obj and filter_obj.name_keyword_reason(company):
                 self.last_list_skip_count += 1
                 continue
             links.append(clean)
@@ -230,6 +233,9 @@ class BaitoruAdapter(SiteAdapter):
         if skip_reason:
             row["電話番号"] = ""
             row["_skip_reason"] = skip_reason
+            # 大手キーワードは電話を取らない。長い休憩にも入れない
+            if skip_reason.startswith("大手キーワード"):
+                row["_skip_governor"] = "1"
             return row
 
         row["電話番号"] = self._extract_phone_from_dialog(page)

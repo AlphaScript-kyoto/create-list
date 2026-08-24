@@ -404,6 +404,12 @@ class Orchestrator:
                 elif skip_reason == "住所が指定した県・市と一致しない":
                     self._skipped_filtered += 1
                     light_skip = True
+                elif skip_reason.startswith("大手キーワード"):
+                    self._skipped_filtered += 1
+                    light_skip = True
+                elif skip_reason.startswith("従業員数"):
+                    self._skipped_filtered += 1
+                    light_skip = True
                 else:
                     self._skipped_filtered += 1
                 self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{skip_reason}）")

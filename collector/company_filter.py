@@ -44,14 +44,23 @@ class CompanyFilter:
             exclude_name_keywords=list(raw.get("exclude_name_keywords") or []),
         )
 
+    def name_keyword_reason(self, name: str) -> str | None:
+        """社名だけの大手キーワード判定（一覧スキャン用）。"""
+        if not self.enabled or not name:
+            return None
+        for keyword in self.exclude_name_keywords:
+            if keyword and keyword.casefold() in name.casefold():
+                return f"大手キーワード「{keyword}」のため除外"
+        return None
+
     def skip_reason(self, row: dict[str, str]) -> str | None:
         if not self.enabled:
             return None
 
         name = row.get("企業名") or row.get("社名") or row.get("会社名") or row.get("店名") or ""
-        for keyword in self.exclude_name_keywords:
-            if keyword and keyword.casefold() in name.casefold():
-                return f"大手キーワード「{keyword}」のため除外"
+        keyword_reason = self.name_keyword_reason(name)
+        if keyword_reason:
+            return keyword_reason
 
         employees = parse_employee_count(row.get("従業員数") or "")
         if self.max_employees is not None and employees is not None:
