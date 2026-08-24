@@ -304,6 +304,7 @@ class Orchestrator:
         url = self._urls[self._detail_index]
         index = self._detail_index + 1
         skip_governor = False
+        light_skip = False
 
         try:
             self._page.goto(url, wait_until="domcontentloaded")
@@ -319,6 +320,7 @@ class Orchestrator:
             )
             skip_reason = row.pop("_skip_reason", "") or ""
             skip_governor = bool(row.pop("_skip_governor", ""))
+            light_skip = False
             if not skip_reason and self._company_filter:
                 skip_reason = self._company_filter.skip_reason(row) or ""
             if not skip_reason and self._recruitment_areas:
@@ -329,12 +331,17 @@ class Orchestrator:
             if skip_reason:
                 if skip_reason == "実装済みリストに既出":
                     self._skipped_known += 1
+                    light_skip = True
+                elif skip_reason == "住所が指定した県・市と一致しない":
+                    self._skipped_filtered += 1
+                    light_skip = True
                 else:
                     self._skipped_filtered += 1
                 self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{skip_reason}）")
                 self._progress("detail", self._collected, self._progress_total())
             else:
                 skip_governor = False
+                light_skip = False
                 dup_key = company_key(row)
                 if dup_key and dup_key in self._seen_companies:
                     self._skipped_duplicates += 1
@@ -348,6 +355,7 @@ class Orchestrator:
                     if blocked:
                         if blocked == "実装済みリストに既出":
                             self._skipped_known += 1
+                            light_skip = True
                         else:
                             self._skipped_filtered += 1
                         self._log(f"[{index}/{len(self._urls)}] {name} をスキップ（{blocked}）")
@@ -370,6 +378,7 @@ class Orchestrator:
         except Exception as exc:
             self._log(f"[{index}/{len(self._urls)}] エラー: {exc}")
             skip_governor = False
+            light_skip = False
 
         self._detail_index = index
 
@@ -389,7 +398,13 @@ class Orchestrator:
             self._scheduler.schedule(self._phase_detail_next, delay)
             return
 
-        continued, rest_sec = self._governor.after_item(lambda: self._stopped)
+        if light_skip:
+            continued, rest_sec = self._governor.after_light_skip(lambda: self._stopped)
+            rest_label = "短い休憩"
+        else:
+            continued, rest_sec = self._governor.after_item(lambda: self._stopped)
+            rest_label = "休憩"
+
         if not continued:
             self._log("収集を停止しました（休憩中）。")
             self._finish(self._csv_path)
@@ -397,7 +412,7 @@ class Orchestrator:
 
         if rest_sec is not None:
             rest_int = max(1, round(rest_sec))
-            self._log(f"[休憩] {rest_int}秒お休みします")
+            self._log(f"[{rest_label}] {rest_int}秒お休みします")
             self._rest_start(rest_sec)
             self._scheduler.schedule(self._resume_after_rest, rest_sec)
             return

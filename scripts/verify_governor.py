@@ -27,6 +27,8 @@ def main() -> None:
         page_delay_min_sec=1.0,
         page_delay_max_sec=3.0,
         pace_multiplier=1.0,
+        skip_rest_min_sec=5,
+        skip_rest_max_sec=20,
     )
 
     batch_sizes: set[int] = set()
@@ -47,16 +49,38 @@ def main() -> None:
     if rest_count < 10:
         raise SystemExit(f"休憩回数が少なすぎます: {rest_count}")
 
+    skip_gov = Governor(
+        batch_min=1,
+        batch_max=5,
+        skip_rest_min_sec=5,
+        skip_rest_max_sec=20,
+        pace_multiplier=1.0,
+    )
+    skip_rest_count = 0
+    for _ in range(samples):
+        continued, rest = skip_gov.after_light_skip()
+        if not continued:
+            raise SystemExit("after_light_skip が停止を返した")
+        if rest is None:
+            continue
+        skip_rest_count += 1
+        _assert_in("rest(light skip)", rest, 5.0, 20.0)
+
+    if skip_rest_count < 10:
+        raise SystemExit(f"短い休憩回数が少なすぎます: {skip_rest_count}")
+
     safe = Governor(pace_multiplier=1.5)
     fast = Governor(pace_multiplier=0.7)
     for _ in range(50):
         _assert_in("rest(safe)", safe.sample_rest_seconds(), 45.0, 450.0)
         _assert_in("rest(fast)", fast.sample_rest_seconds(), 21.0, 210.0)
+        _assert_in("skip(safe)", safe.sample_skip_rest_seconds(), 7.5, 30.0)
+        _assert_in("skip(fast)", fast.sample_skip_rest_seconds(), 3.5, 14.0)
         _assert_in("batch", float(safe._roll_batch_size()), 1, 5)
         _assert_in("batch", float(fast._roll_batch_size()), 1, 5)
 
-    print(f"OK: 休憩 {rest_count} 回 / 次バッチ幅 {sorted(batch_sizes)}")
-    print("OK: 安全 45〜450 / 標準 30〜300 / 速め 21〜210 / 件数 1〜5")
+    print(f"OK: 通常休憩 {rest_count} 回 / 短い休憩 {skip_rest_count} 回 / 次バッチ幅 {sorted(batch_sizes)}")
+    print("OK: 安全 45〜450 / 標準 30〜300 / 速め 21〜210 / 短い 5〜20 / 件数 1〜5")
 
 
 if __name__ == "__main__":

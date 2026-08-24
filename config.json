@@ -8,6 +8,8 @@
     "batch_max": 5,
     "rest_min_sec": 30,
     "rest_max_sec": 300,
+    "skip_rest_min_sec": 5,
+    "skip_rest_max_sec": 20,
     "page_delay_min_sec": 1.0,
     "page_delay_max_sec": 3.0
   },

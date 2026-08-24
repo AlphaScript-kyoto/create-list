@@ -454,6 +454,8 @@ class AppWindow(ctk.CTk):
             page_delay_min_sec=float(gov.get("page_delay_min_sec", 1.0)),
             page_delay_max_sec=float(gov.get("page_delay_max_sec", 3.0)),
             pace_multiplier=self._pace_multiplier(),
+            skip_rest_min_sec=float(gov.get("skip_rest_min_sec", 5)),
+            skip_rest_max_sec=float(gov.get("skip_rest_max_sec", 20)),
         )
 
     def _on_open(self) -> None:
