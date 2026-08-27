@@ -54,6 +54,7 @@ class AppWindow(ctk.CTk):
             incognito=browser_cfg.get("incognito", True),
             clear_storage_on_open=browser_cfg.get("clear_storage_on_open", True),
             profile_subdir=browser_cfg.get("profile_subdir", "chrome"),
+            on_disconnect=self._on_browser_disconnected,
         )
         self._orchestrator: Orchestrator | None = None
         self._known_list_cache: KnownList | None = None
@@ -460,12 +461,25 @@ class AppWindow(ctk.CTk):
             skip_rest_max_sec=float(gov.get("skip_rest_max_sec", 20)),
         )
 
+    def _on_browser_disconnected(self) -> None:
+        """Chrome ウィンドウが閉じられたときに、状態表示を未接続へ戻す。"""
+
+        def update() -> None:
+            self._set_browser_status("ブラウザ: 未接続（ウィンドウが閉じられました）", "gray")
+            self._append_log("ブラウザウィンドウが閉じられました。[開く] で再起動できます。")
+
+        try:
+            self.after(0, update)
+        except Exception:
+            pass
+
     def _on_open(self) -> None:
         adapter = self._selected_adapter()
         if not adapter:
             messagebox.showerror("エラー", "収集サイトが選択されていません。")
             return
         try:
+            # ウィンドウを閉じたあとは必ず新規起動。サイト変更時はトップへ移動する。
             page, mode = self._browser.open_site(adapter.top_url)
             page = self._browser.pick_page(getattr(adapter, "list_url_hint", "")) or page
             display_url = page.url if len(page.url) <= 60 else page.url[:60] + "…"
@@ -483,6 +497,10 @@ class AppWindow(ctk.CTk):
             self._set_browser_status("ブラウザ: エラー", "#ef4444")
             messagebox.showerror("ブラウザ起動エラー", str(exc))
             self._append_log(f"ブラウザ起動に失敗しました: {exc}")
+            try:
+                self._browser.close()
+            except Exception:
+                pass
 
     def _on_collect(self) -> None:
         if self._is_collecting:
