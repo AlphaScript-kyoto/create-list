@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app_utils import PROJECT_ROOT
 from adapters.baitoru import BaitoruAdapter
 from adapters.base import SiteAdapter
 from adapters.ekiten import EkitenAdapter
 from adapters.google_maps import GoogleMapsAdapter
+from adapters.hotpepper_beauty import HotpepperBeautyAdapter
 from adapters.rikunabi_next import RikunabiNextAdapter
 from adapters.site_loader import load_sites_from_json
 from adapters.tabelog import TabelogAdapter
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_SITES_FILE = _PROJECT_ROOT / "sites.json"
+_DEFAULT_SITES_FILE = PROJECT_ROOT / "sites.json"
 
 # Python で実装した組み込みアダプタ
 _BUILTIN_ADAPTERS: list[type[SiteAdapter]] = [
@@ -21,6 +22,7 @@ _BUILTIN_ADAPTERS: list[type[SiteAdapter]] = [
     BaitoruAdapter,
     TabelogAdapter,
     EkitenAdapter,
+    HotpepperBeautyAdapter,
     GoogleMapsAdapter,
 ]
 
