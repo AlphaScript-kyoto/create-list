@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import math
 import time
+from datetime import date
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
+from urllib.parse import urlparse
 
 import customtkinter as ctk
 
 from adapters.base import SiteAdapter
+from adapters.tabelog import TabelogAdapter
 from adapters.registry import get_all_adapters
 from app_utils import timestamp_log
 from browser.controller import BrowserController
@@ -66,12 +69,13 @@ class AppWindow(ctk.CTk):
         self._selected_areas: list[tuple[str, str]] = []
 
         self.title("半手動リスト収集ツール")
-        self.geometry("700x720")
-        self.minsize(520, 420)
+        self.geometry("1080x680")
+        self.minsize(900, 640)
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
         self._build_ui()
+        self._fit_window_to_content()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         json_count = sum(1 for a in self._adapters if a.__class__.__name__ == "JsonSiteAdapter")
@@ -79,29 +83,54 @@ class AppWindow(ctk.CTk):
             self._append_log(f"sites.json から {json_count} 件のサイトを読み込みました。")
 
     def _build_ui(self) -> None:
-        pad = {"padx": 12, "pady": 6}
+        pad = {"padx": 10, "pady": 4}
 
-        self._scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self._scroll.pack(fill="both", expand=True)
-        root = self._scroll
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=8, pady=8)
+        main.grid_columnconfigure(0, weight=0, minsize=420)
+        main.grid_columnconfigure(1, weight=1)
+        main.grid_rowconfigure(0, weight=1)
 
-        top = ctk.CTkFrame(root)
-        top.pack(fill="x", padx=8, pady=(8, 8))
+        left = ctk.CTkFrame(main)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        right = ctk.CTkFrame(main, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_rowconfigure(1, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        top = ctk.CTkFrame(left, fg_color="transparent")
+        btn_frame = ctk.CTkFrame(left, fg_color="transparent")
+        status = ctk.CTkFrame(left, fg_color="transparent")
+
+        # 下側（ボタン・状態）を先に pack して、縦が足りないときも操作系が隠れにくくする
+        self._browser_status_label = ctk.CTkLabel(left, text="ブラウザ: 未接続", text_color="gray")
+        self._browser_status_label.pack(side="bottom", anchor="w", padx=10, pady=(0, 6))
+        self._rest_label = ctk.CTkLabel(left, text="", text_color="#f59e0b")
+        self._rest_label.pack(side="bottom", anchor="w", padx=10, pady=(0, 2))
+        status.pack(side="bottom", fill="x", padx=10, pady=(0, 2))
+        btn_frame.pack(side="bottom", fill="x", padx=8, pady=(0, 4))
+        top.pack(side="top", fill="both", expand=True, padx=4, pady=4)
 
         ctk.CTkLabel(top, text="収集サイト:").grid(row=0, column=0, sticky="w", **pad)
         names = list(self._adapter_map.keys())
         self._site_var = ctk.StringVar(value=names[0] if names else "")
-        self._site_combo = ctk.CTkComboBox(top, values=names, variable=self._site_var, width=280)
-        self._site_combo.grid(row=0, column=1, sticky="w", **pad)
+        self._site_combo = ctk.CTkComboBox(
+            top,
+            values=names,
+            variable=self._site_var,
+            width=240,
+            command=self._on_site_change,
+        )
+        self._site_combo.grid(row=0, column=1, columnspan=2, sticky="ew", **pad)
 
         ctk.CTkLabel(top, text="取得件数:").grid(row=1, column=0, sticky="w", **pad)
-        self._limit_entry = ctk.CTkEntry(top, width=120)
+        self._limit_entry = ctk.CTkEntry(top, width=100)
         self._limit_entry.insert(0, "0")
         self._limit_entry.grid(row=1, column=1, sticky="w", **pad)
         ctk.CTkLabel(top, text="（0 = 上限なし）", text_color="gray").grid(row=1, column=2, sticky="w")
 
         ctk.CTkLabel(top, text="CSV区切り:").grid(row=2, column=0, sticky="w", **pad)
-        self._split_entry = ctk.CTkEntry(top, width=120)
+        self._split_entry = ctk.CTkEntry(top, width=100)
         self._split_entry.insert(0, str(int(self._config.get("csv_rows_per_file", 50))))
         self._split_entry.grid(row=2, column=1, sticky="w", **pad)
         ctk.CTkLabel(top, text="件ごと（0 = 1ファイル）", text_color="gray").grid(row=2, column=2, sticky="w")
@@ -112,8 +141,24 @@ class AppWindow(ctk.CTk):
         self._pace_var = ctk.StringVar(value="標準")
         for label in self.PACE_OPTIONS:
             ctk.CTkRadioButton(pace_frame, text=label, variable=self._pace_var, value=label).pack(
-                side="left", padx=8
+                side="left", padx=6
             )
+
+        self._include_known_var = ctk.BooleanVar(value=False)
+        self._include_known_check = ctk.CTkCheckBox(
+            top,
+            text="投入済みも気にせず収集（専用CSVへ保存）",
+            variable=self._include_known_var,
+        )
+        self._include_known_check.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
+
+        self._include_mobile_var = ctk.BooleanVar(value=False)
+        self._include_mobile_check = ctk.CTkCheckBox(
+            top,
+            text="携帯番号の案件も収集（通常CSVへ保存）",
+            variable=self._include_mobile_var,
+        )
+        self._include_mobile_check.grid(row=5, column=0, columnspan=3, sticky="w", **pad)
 
         self._area_enabled_var = ctk.BooleanVar(value=False)
         self._area_check = ctk.CTkCheckBox(
@@ -122,77 +167,100 @@ class AppWindow(ctk.CTk):
             variable=self._area_enabled_var,
             command=self._on_area_toggle,
         )
-        self._area_check.grid(row=4, column=0, columnspan=3, sticky="w", **pad)
+        self._area_check.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
 
         area_frame = ctk.CTkFrame(top, fg_color="transparent")
-        area_frame.grid(row=5, column=0, columnspan=3, sticky="w", **pad)
-        ctk.CTkLabel(area_frame, text="県:").pack(side="left", padx=(0, 6))
+        area_frame.grid(row=7, column=0, columnspan=3, sticky="ew", **pad)
+        ctk.CTkLabel(area_frame, text="県:").pack(side="left", padx=(0, 4))
         self._pref_combo = ctk.CTkComboBox(
             area_frame,
             values=prefecture_choices(),
-            width=140,
+            width=120,
             command=self._on_pref_change,
         )
         self._pref_combo.set(PREF_NONE)
         self._pref_combo.pack(side="left")
-        ctk.CTkLabel(area_frame, text="市:").pack(side="left", padx=(12, 6))
-        self._city_combo = ctk.CTkComboBox(area_frame, values=city_choices(""), width=180)
+        ctk.CTkLabel(area_frame, text="市:").pack(side="left", padx=(8, 4))
+        self._city_combo = ctk.CTkComboBox(area_frame, values=city_choices(""), width=140)
         self._city_combo.set(CITY_NONE)
         self._city_combo.pack(side="left")
         self._area_add_btn = ctk.CTkButton(
-            area_frame, text="追加", width=60, command=self._on_area_add
+            area_frame, text="追加", width=56, command=self._on_area_add
         )
-        self._area_add_btn.pack(side="left", padx=(12, 0))
+        self._area_add_btn.pack(side="left", padx=(8, 0))
 
         list_header = ctk.CTkFrame(top, fg_color="transparent")
-        list_header.grid(row=6, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        list_header.grid(row=8, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 2))
         ctk.CTkLabel(list_header, text="選んだ募集地:").pack(side="left")
         self._area_clear_btn = ctk.CTkButton(
             list_header, text="すべて解除", width=90, command=self._on_area_clear, height=24
         )
-        self._area_clear_btn.pack(side="left", padx=(12, 0))
+        self._area_clear_btn.pack(side="left", padx=(10, 0))
 
-        self._area_list_frame = ctk.CTkScrollableFrame(top, height=80, width=520)
-        self._area_list_frame.grid(row=7, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
+        self._area_list_frame = ctk.CTkScrollableFrame(top, height=64, width=380)
+        self._area_list_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 6))
         self._area_empty_label = ctk.CTkLabel(
             self._area_list_frame,
             text="（まだ選んでいません）",
             text_color="gray",
         )
         self._area_empty_label.pack(anchor="w", padx=4, pady=4)
-        self._on_area_toggle()
 
-        btn_frame = ctk.CTkFrame(root, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=8, pady=(0, 4))
-        self._open_btn = ctk.CTkButton(btn_frame, text="開く", width=100, command=self._on_open)
-        self._open_btn.pack(side="left", padx=6)
-        self._collect_btn = ctk.CTkButton(btn_frame, text="収集開始", width=100, command=self._on_collect)
-        self._collect_btn.pack(side="left", padx=6)
-        self._stop_btn = ctk.CTkButton(
-            btn_frame, text="停止", width=100, command=self._on_stop, state="disabled"
+        self._tabelog_open_frame = ctk.CTkFrame(top, fg_color="transparent")
+        self._tabelog_open_frame.grid(row=10, column=0, columnspan=3, sticky="ew", **pad)
+        self._tabelog_open_enabled_var = ctk.BooleanVar(value=False)
+        self._tabelog_open_check = ctk.CTkCheckBox(
+            self._tabelog_open_frame,
+            text="オープン日で絞り込む（食べログのみ）",
+            variable=self._tabelog_open_enabled_var,
+            command=self._on_tabelog_open_toggle,
         )
-        self._stop_btn.pack(side="left", padx=6)
+        self._tabelog_open_check.pack(anchor="w")
+        open_row = ctk.CTkFrame(self._tabelog_open_frame, fg_color="transparent")
+        open_row.pack(anchor="w", pady=(4, 0))
+        self._tabelog_open_date_entry = ctk.CTkEntry(open_row, width=120, placeholder_text="2026/06/06")
+        self._tabelog_open_date_entry.pack(side="left")
+        ctk.CTkLabel(open_row, text="以降にオープンした店のみ", text_color="gray").pack(side="left", padx=(8, 0))
 
-        status = ctk.CTkFrame(root, fg_color="transparent")
-        status.pack(fill="x", padx=12, pady=(4, 0))
+        top.grid_columnconfigure(1, weight=1)
+        self._on_area_toggle()
+        self._on_site_change(self._site_var.get())
+
+        self._open_btn = ctk.CTkButton(btn_frame, text="開く", width=96, command=self._on_open)
+        self._open_btn.pack(side="left", padx=4)
+        self._reset_btn = ctk.CTkButton(
+            btn_frame, text="切断", width=72, command=self._on_browser_reset, fg_color="#6b7280"
+        )
+        self._reset_btn.pack(side="left", padx=4)
+        self._collect_btn = ctk.CTkButton(btn_frame, text="収集開始", width=96, command=self._on_collect)
+        self._collect_btn.pack(side="left", padx=4)
+        self._stop_btn = ctk.CTkButton(
+            btn_frame, text="停止", width=96, command=self._on_stop, state="disabled"
+        )
+        self._stop_btn.pack(side="left", padx=4)
+
         self._progress_label = ctk.CTkLabel(status, text="待機中")
-        self._progress_label.pack(side="left")
+        self._progress_label.pack(anchor="w")
         self._elapsed_label = ctk.CTkLabel(status, text="経過時間: —")
-        self._elapsed_label.pack(side="left", padx=(16, 0))
+        self._elapsed_label.pack(anchor="w", pady=(2, 0))
 
-        self._rest_label = ctk.CTkLabel(root, text="", text_color="#f59e0b")
-        self._rest_label.pack(anchor="w", padx=12, pady=(2, 0))
-        self._browser_status_label = ctk.CTkLabel(root, text="ブラウザ: 未接続", text_color="gray")
-        self._browser_status_label.pack(anchor="w", padx=12, pady=(0, 4))
+        ctk.CTkLabel(
+            right,
+            text="ログ",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=4, pady=(0, 4))
+        self._log_box = ctk.CTkTextbox(right)
+        self._log_box.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+        self._log_box.configure(state="disabled")
 
-        notice_frame = ctk.CTkFrame(root)
-        notice_frame.pack(fill="x", padx=8, pady=(0, 6))
+        notice_frame = ctk.CTkFrame(right)
+        notice_frame.grid(row=2, column=0, sticky="ew")
         ctk.CTkLabel(
             notice_frame,
             text="注意事項",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#b45309",
-        ).pack(anchor="w", padx=12, pady=(8, 2))
+        ).pack(anchor="w", padx=10, pady=(6, 2))
         self._notice_label = ctk.CTkLabel(
             notice_frame,
             text=(
@@ -207,15 +275,10 @@ class AppWindow(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#9ca3af",
             justify="left",
-            wraplength=620,
+            wraplength=480,
             anchor="w",
         )
-        self._notice_label.pack(fill="x", padx=12, pady=(0, 8))
-
-        ctk.CTkLabel(root, text="ログ").pack(anchor="w", padx=12, pady=(2, 0))
-        self._log_box = ctk.CTkTextbox(root, height=180)
-        self._log_box.pack(fill="x", padx=8, pady=(4, 12))
-        self._log_box.configure(state="disabled")
+        self._notice_label.pack(fill="x", padx=10, pady=(0, 8))
         self.bind("<Configure>", self._on_window_configure)
 
         self._append_log("半手動リスト収集ツールを起動しました。")
@@ -231,8 +294,21 @@ class AppWindow(ctk.CTk):
     def _on_window_configure(self, event) -> None:
         if event.widget is not self:
             return
-        wrap = max(320, event.width - 80)
+        # 右ペイン幅に合わせて注意事項の折り返しを調整
+        wrap = max(280, event.width - 460)
         self._notice_label.configure(wraplength=wrap)
+
+    def _fit_window_to_content(self) -> None:
+        """起動時に左ペインの設定項目がスクロールなしで収まる高さへ合わせる。"""
+        self._tabelog_open_frame.grid()
+        self.update_idletasks()
+        req_w = self.winfo_reqwidth()
+        req_h = self.winfo_reqheight()
+        self._on_site_change(self._site_var.get())
+        width = max(1080, req_w + 24)
+        height = max(680, req_h + 24)
+        self.geometry(f"{width}x{height}")
+        self.minsize(900, max(640, height - 48))
 
     def _append_log(self, message: str) -> None:
         line = timestamp_log(message) + "\n"
@@ -307,6 +383,25 @@ class AppWindow(ctk.CTk):
     def _set_browser_status(self, text: str, color: str = "gray") -> None:
         self._browser_status_label.configure(text=text, text_color=color)
 
+    def _sync_browser_status(self) -> None:
+        """表示だけ古い「接続中」を、実際の Chrome の生死に合わせて更新する。"""
+        url = self._browser.current_url()
+        if url:
+            display_url = url if len(url) <= 60 else url[:60] + "…"
+            self._set_browser_status(f"ブラウザ: 接続中 — {display_url}", "#22c55e")
+        else:
+            self._set_browser_status("ブラウザ: 未接続", "gray")
+
+    def _on_browser_reset(self) -> None:
+        if self._is_collecting:
+            return
+        self._browser.force_reset()
+        self._set_browser_status("ブラウザ: 未接続", "gray")
+        self._append_log(
+            "ブラウザ接続をリセットしました。タスクマネージャーで Chrome を落とす必要はありません。"
+        )
+        self._append_log("[開く] で新しい Chrome を起動してください。")
+
     def _update_progress(self, phase: str, current: int, total: int | None) -> None:
         def update() -> None:
             if phase == "idle":
@@ -328,11 +423,15 @@ class AppWindow(ctk.CTk):
             state_collect = "disabled" if collecting else "normal"
             state_stop = "normal" if collecting else "disabled"
             self._open_btn.configure(state=state_open)
+            self._reset_btn.configure(state=state_open)
             self._collect_btn.configure(state=state_collect)
             self._stop_btn.configure(state=state_stop)
             self._area_check.configure(state=state_open)
+            self._include_known_check.configure(state=state_open)
+            self._include_mobile_check.configure(state=state_open)
             self._limit_entry.configure(state=state_open)
             self._split_entry.configure(state=state_open)
+            self._on_tabelog_open_toggle()
             if collecting:
                 self._pref_combo.configure(state="disabled")
                 self._city_combo.configure(state="disabled")
@@ -350,6 +449,39 @@ class AppWindow(ctk.CTk):
         self._city_combo.configure(state=state)
         self._area_add_btn.configure(state=state)
         self._area_clear_btn.configure(state=state)
+
+    def _on_site_change(self, _value: str = "") -> None:
+        adapter = self._selected_adapter()
+        is_tabelog = adapter is not None and adapter.site_id == "tabelog"
+        if is_tabelog:
+            self._tabelog_open_frame.grid()
+        else:
+            self._tabelog_open_frame.grid_remove()
+        self._on_tabelog_open_toggle()
+
+    def _on_tabelog_open_toggle(self) -> None:
+        adapter = self._selected_adapter()
+        is_tabelog = adapter is not None and adapter.site_id == "tabelog"
+        enabled = (
+            is_tabelog
+            and bool(self._tabelog_open_enabled_var.get())
+            and not self._is_collecting
+        )
+        state = "normal" if enabled else "disabled"
+        self._tabelog_open_check.configure(state="normal" if is_tabelog and not self._is_collecting else "disabled")
+        self._tabelog_open_date_entry.configure(state=state)
+
+    def _get_tabelog_open_since(self) -> date | None:
+        adapter = self._selected_adapter()
+        if adapter is None or adapter.site_id != "tabelog":
+            return None
+        if not self._tabelog_open_enabled_var.get():
+            return None
+        raw = self._tabelog_open_date_entry.get().strip()
+        if not raw:
+            return None
+        parsed = TabelogAdapter.parse_open_date(raw)
+        return parsed
 
     def _on_pref_change(self, value: str = "") -> None:
         prefecture = value or self._pref_combo.get()
@@ -431,6 +563,50 @@ class AppWindow(ctk.CTk):
     def _selected_adapter(self) -> SiteAdapter | None:
         return self._adapter_map.get(self._site_var.get())
 
+    def _resolve_collection_page(self, adapter: SiteAdapter):
+        """一覧として有効なタブを探す（トップページのタブより検索結果を優先）。"""
+        hint = getattr(adapter, "list_url_hint", "")
+        hint_lower = hint.lower()
+        is_tabelog = getattr(adapter, "site_id", "") == "tabelog"
+
+        def score_page(page) -> int:
+            url = self._browser.page_url(page)
+            path = urlparse(url).path
+            score = BrowserController._url_pick_score(url, hint_lower)
+            if is_tabelog and TabelogAdapter.is_list_path(path):
+                score += 120
+            if self._browser.page is page:
+                score += 5
+            return score
+
+        pages = self._browser.list_pages()
+        if not pages:
+            return self._browser.pick_page(hint)
+
+        ranked = sorted(pages, key=score_page, reverse=True)
+
+        for page in ranked:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=3000)
+            except Exception:
+                pass
+            try:
+                if adapter.validate_list_page(page):
+                    self._browser.remember_page(page)
+                    return page
+            except Exception:
+                continue
+
+        best_guess = ranked[0]
+        try:
+            if is_tabelog and TabelogAdapter.is_list_path(urlparse(self._browser.page_url(best_guess)).path):
+                self._browser.remember_page(best_guess)
+                return best_guess
+        except Exception:
+            pass
+
+        return self._browser.pick_page(hint)
+
     def _parse_limit(self) -> int:
         try:
             return max(0, int(self._limit_entry.get().strip() or "0"))
@@ -478,15 +654,24 @@ class AppWindow(ctk.CTk):
         if not adapter:
             messagebox.showerror("エラー", "収集サイトが選択されていません。")
             return
+        self._sync_browser_status()
         try:
-            # ウィンドウを閉じたあとは必ず新規起動。サイト変更時はトップへ移動する。
             page, mode = self._browser.open_site(adapter.top_url)
             page = self._browser.pick_page(getattr(adapter, "list_url_hint", "")) or page
-            display_url = page.url if len(page.url) <= 60 else page.url[:60] + "…"
+            if page is None or page.is_closed():
+                raise RuntimeError("ブラウザのタブを取得できませんでした")
+            self._browser.note_connected()
+            page_url = self._browser.page_url(page)
+            display_url = page_url if len(page_url) <= 60 else page_url[:60] + "…"
             self._set_browser_status(f"ブラウザ: 接続中 — {display_url}", "#22c55e")
             self._append_log(f"{mode}: {adapter.display_name}")
             if adapter.supports_collection():
-                self._append_log("同じ Chrome（黄色い帯が出ているウィンドウ）で地域・キーワードを検索し、一覧が出たら [収集開始] を押してください。")
+                self._append_log(
+                    "同じ Chrome（黄色い帯）で地域・キーワードを検索し、一覧が出たら [収集開始] を押してください。"
+                )
+                self._append_log(
+                    "※ 黄色い帯の Chrome が複数ある場合は古い方を閉じ、[開く] で開いたウィンドウだけ使ってください。"
+                )
                 if "session/destroy" in page.url:
                     self._append_log(
                         "⚠ ログアウト画面のままです。このウィンドウのアドレスバーが job_search になるまで検索してください。"
@@ -494,17 +679,31 @@ class AppWindow(ctk.CTk):
             else:
                 self._append_log("このサイトは [開く] による接続確認のみ可能です。")
         except Exception as exc:
-            self._set_browser_status("ブラウザ: エラー", "#ef4444")
-            messagebox.showerror("ブラウザ起動エラー", str(exc))
             self._append_log(f"ブラウザ起動に失敗しました: {exc}")
-            try:
-                self._browser.close()
-            except Exception:
-                pass
+            if self._browser.has_open_pages():
+                self._browser.note_connected()
+                self._sync_browser_status()
+                self._append_log(
+                    "Chrome は起動しています。エラー表示が出ても、そのまま検索して [収集開始] を試せます。"
+                )
+                messagebox.showwarning(
+                    "ブラウザ起動の警告",
+                    f"{exc}\n\nChrome は起動しているようです。\n"
+                    "このまま検索して [収集開始] を試してください。",
+                )
+            else:
+                self._set_browser_status("ブラウザ: エラー", "#ef4444")
+                messagebox.showerror("ブラウザ起動エラー", str(exc))
+                try:
+                    self._browser.close()
+                except Exception:
+                    pass
 
     def _on_collect(self) -> None:
         if self._is_collecting:
             return
+
+        self._sync_browser_status()
 
         adapter = self._selected_adapter()
         if not adapter:
@@ -519,9 +718,41 @@ class AppWindow(ctk.CTk):
             )
             return
 
-        page = self._browser.pick_page(getattr(adapter, "list_url_hint", ""))
+        page = self._resolve_collection_page(adapter)
         if page is None:
             messagebox.showwarning("確認", "先に [開く] でブラウザを起動してください。")
+            return
+
+        if not adapter.validate_list_page(page):
+            tab_urls = self._browser.tab_urls()
+            tab_text = "\n".join(f"  · {url}" for url in tab_urls) if tab_urls else "  （タブなし）"
+            hint = adapter.explain_list_page_failure(page) or ""
+            page_url = self._browser.page_url(page)
+            extra = ""
+            if getattr(adapter, "site_id", "") == "tabelog" and len(tab_urls) == 1 and urlparse(tab_urls[0]).path.rstrip("/") in ("", ""):
+                extra = (
+                    "\n\n※ 黄色い帯の Chrome が2つ以上開いていませんか？\n"
+                    "  古いウィンドウではなく、[開く] で開いたウィンドウで検索し直してください。"
+                )
+            if getattr(adapter, "site_id", "") == "tabelog":
+                steps = "手順: [開く] → 表示された Chrome で東京都などを検索 → ニューオープンタブを開く → [収集開始]"
+            elif hint:
+                steps = hint
+            else:
+                steps = "手順: [開く] → 表示された Chrome で検索し、お店のカードが並んだ一覧で [収集開始]"
+            messagebox.showwarning(
+                "一覧ページではありません",
+                "検索結果一覧のタブが見つかりませんでした。\n\n"
+                f"ツールが見ている URL:\n  {page_url}\n\n"
+                f"開いているタブ:\n{tab_text}\n\n"
+                f"{steps}"
+                f"{extra}",
+            )
+            self._append_log(f"収集対象タブ（一覧ではない）: {page_url}")
+            if tab_urls:
+                self._append_log("開いているタブ: " + " | ".join(tab_urls))
+            if hint:
+                self._append_log(hint)
             return
 
         recruitment_areas = self._get_recruitment_areas()
@@ -533,8 +764,23 @@ class AppWindow(ctk.CTk):
             )
             return
 
+        open_since = self._get_tabelog_open_since()
+        if (
+            self._tabelog_open_enabled_var.get()
+            and adapter.site_id == "tabelog"
+            and open_since is None
+        ):
+            messagebox.showwarning(
+                "確認",
+                "オープン日で絞り込む場合は、日付を入力してください。\n"
+                "例: 2026/06/06（この日以降にオープンした店のみ保存）",
+            )
+            return
+
         limit = self._parse_limit()
         split_every = self._parse_split()
+        include_known = bool(self._include_known_var.get())
+        include_mobile = bool(self._include_mobile_var.get())
         self._is_collecting = True
         self._set_collecting(True)
         self._start_elapsed_timer()
@@ -542,17 +788,33 @@ class AppWindow(ctk.CTk):
         tab_urls = self._browser.tab_urls()
         if tab_urls:
             self._append_log("開いているタブ: " + " | ".join(tab_urls))
-        try:
-            page.bring_to_front()
-        except Exception:
-            pass
-        self._append_log(f"収集対象タブ: {page.url}")
+        self._append_log(f"収集対象タブ: {self._browser.page_url(page)}")
+        page_url = self._browser.page_url(page)
+        display_url = page_url if len(page_url) <= 60 else page_url[:60] + "…"
+        self._set_browser_status(f"ブラウザ: 接続中 — {display_url}", "#22c55e")
         known_path = self._known_list_path() if self._known_list_path().is_file() else None
         if known_path is None:
             self._append_log(
-                "実装済みリストのファイルが無いので、今回は未登録判定なしです（090/080/070 は除外します）。"
+                "実装済みリストのファイルが無いので、今回は投入済み判定なしです。"
             )
-        self._run_collect(adapter, limit, recruitment_areas, known_path, split_every)
+        if include_known and known_path is not None:
+            self._append_log("投入済み案件も収集し、専用CSVへ分けて保存します。")
+        if include_mobile:
+            self._append_log("090/080/070 の携帯番号案件も収集します。")
+        if open_since:
+            self._append_log(
+                f"オープン日フィルタ: {TabelogAdapter.format_open_date(open_since)} 以降にオープンした店のみ保存します。"
+            )
+        self._run_collect(
+            adapter,
+            limit,
+            recruitment_areas,
+            known_path,
+            split_every,
+            open_since,
+            include_known,
+            include_mobile,
+        )
 
     def _run_collect(
         self,
@@ -561,8 +823,11 @@ class AppWindow(ctk.CTk):
         recruitment_areas: list[dict[str, str]] | None = None,
         known_list_path: Path | None = None,
         csv_rows_per_file: int = 0,
+        tabelog_open_since: date | None = None,
+        include_known: bool = False,
+        include_mobile: bool = False,
     ) -> None:
-        page = self._browser.pick_page(getattr(adapter, "list_url_hint", "")) or self._browser.page
+        page = self._resolve_collection_page(adapter)
         if page is None:
             self._append_log("ブラウザが閉じられています。再度 [開く] してください。")
             self._is_collecting = False
@@ -614,6 +879,10 @@ class AppWindow(ctk.CTk):
             known_list_path=known_list_path,
             known_list=cached,
             csv_rows_per_file=csv_rows_per_file,
+            tabelog_open_since=tabelog_open_since,
+            page_resolver=lambda: self._resolve_collection_page(adapter),
+            include_known=include_known,
+            include_mobile=include_mobile,
         )
         self._orchestrator = orchestrator
         try:

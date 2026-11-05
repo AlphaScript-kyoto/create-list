@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 
@@ -14,8 +14,9 @@ from collector.csv_schema import (
     COMMON_COLUMNS,
     clean_contact_name,
     company_key,
-    csv_skip_reason,
+    is_mobile_phone,
     normalize_text,
+    row_phone,
 )
 from collector.csv_writer import CsvWriter
 from collector.governor import Governor
@@ -27,6 +28,7 @@ ProgressCallback = Callable[[str, int, int | None], None]
 FinishCallback = Callable[[Path | None, int], None]
 RestStartCallback = Callable[[float], None]
 RestEndCallback = Callable[[], None]
+PageResolver = Callable[[], object | None]
 
 
 class StepScheduler(ABC):
@@ -73,9 +75,14 @@ class Orchestrator:
         known_list_path: Path | None = None,
         known_list: KnownList | None = None,
         csv_rows_per_file: int = 0,
+        tabelog_open_since: date | None = None,
+        page_resolver: PageResolver | None = None,
+        include_known: bool = False,
+        include_mobile: bool = False,
     ) -> None:
         self._adapter = adapter
         self._page = page
+        self._page_resolver = page_resolver
         self._output_dir = output_dir
         self._governor = governor
         self._max_items = max(0, max_items)
@@ -89,8 +96,11 @@ class Orchestrator:
         self._scheduler = scheduler or ImmediateScheduler()
         self._company_filter = company_filter
         self._recruitment_areas = list(recruitment_areas or [])
+        self._tabelog_open_since = tabelog_open_since
         self._known_list_path = Path(known_list_path) if known_list_path else None
         self._known_list: KnownList | None = known_list
+        self._include_known = include_known
+        self._include_mobile = include_mobile
         if company_filter is not None:
             self._adapter.set_company_filter(company_filter)
 
@@ -101,13 +111,17 @@ class Orchestrator:
         self._scan_page_num = 1
         self._detail_index = 0
         self._writer: CsvWriter | None = None
+        self._known_writer: CsvWriter | None = None
         self._csv_path: Path | None = None
+        self._known_collected = 0
         self._url_cache_path: Path | None = None
         self._seen_companies: set[tuple[str, str]] = set()
         self._skipped_duplicates = 0
         self._skipped_filtered = 0
         self._skipped_known = 0
         self._appended_known = 0
+        self._skipped_open_date = 0
+        self._list_open_skipped_at_scan = 0
 
     @property
     def collected_count(self) -> int:
@@ -237,11 +251,20 @@ class Orchestrator:
         # ImmediateScheduler なら start() 内ですべて完了している
         return result[0]
 
+    def _refresh_collection_page(self) -> None:
+        if self._page_resolver is None:
+            return
+        page = self._page_resolver()
+        if page is not None:
+            self._page = page
+
     def _phase_validate(self) -> None:
         logger = logging.getLogger("list_collector")
         if self._stopped:
             self._finish(None)
             return
+
+        self._refresh_collection_page()
 
         if not self._adapter.validate_list_page(self._page):
             hint = self._adapter.explain_list_page_failure(self._page)
@@ -256,6 +279,10 @@ class Orchestrator:
             self._finish(None)
             return
 
+        setter = getattr(self._adapter, "set_open_on_or_after", None)
+        if callable(setter):
+            setter(self._tabelog_open_since)
+
         self._urls = []
         self._seen = set()
         self._scan_page_num = 1
@@ -269,6 +296,7 @@ class Orchestrator:
             self._finish(None)
             return
 
+        self._refresh_collection_page()
         links = self._adapter.extract_list_links(self._page)
         new_count = 0
         for url in links:
@@ -278,6 +306,7 @@ class Orchestrator:
                 new_count += 1
 
         skipped_list = int(getattr(self._adapter, "last_list_skip_count", 0) or 0)
+        self._list_open_skipped_at_scan += skipped_list
         skip_note = f" / 一覧除外 {skipped_list} 件" if skipped_list else ""
         self._log(
             f"  一覧 {self._scan_page_num} ページ目: +{new_count} 件"
@@ -292,6 +321,11 @@ class Orchestrator:
 
         if new_count == 0 and self._scan_page_num > 1:
             self._log("  新しい求人リンクが増えなかったため、一覧スキャンを終了します。")
+            self._complete_scan_phase()
+            return
+
+        if self._scan_page_num >= 200:
+            self._log("  一覧スキャンは 200 ページで打ち切り、詳細取得に進みます。")
             self._complete_scan_phase()
             return
 
@@ -313,6 +347,11 @@ class Orchestrator:
 
         self._url_cache_path = self._save_url_cache()
         self._log(f"【フェーズ1 完了】合計 {len(self._urls)} 件の URL をキャッシュしました。")
+        if self._list_open_skipped_at_scan:
+            self._log(
+                f"  一覧のオープン日判定で {self._list_open_skipped_at_scan} 件を除外しました"
+                "（未来の日付・日付フィルタ不一致。詳細は開きません）"
+            )
         self._log(f"  キャッシュファイル: {self._url_cache_path}")
         self._log(f"【フェーズ2】{len(self._urls)} 件の詳細情報を取得します…")
         if self._max_items > 0:
@@ -333,11 +372,21 @@ class Orchestrator:
                 for area in self._recruitment_areas
             ]
             self._log(f"  住所フィルタ: {' / '.join(labels)} のいずれかに一致するものだけ保存します")
-        self._log("  CSV ルール: 090/080/070 は出さない／実装済みは出さない（全サイト共通）")
+        if self._tabelog_open_since:
+            self._log(
+                "  オープン日フィルタ: "
+                f"{self._tabelog_open_since.strftime('%Y/%m/%d')} 以降にオープンした店のみ"
+            )
+        mobile_rule = "収集する" if self._include_mobile else "除外する"
+        known_rule = "専用CSVへ保存する" if self._include_known else "除外する"
+        self._log(
+            f"  CSV ルール: 090/080/070 は{mobile_rule}／実装済みは{known_rule}"
+        )
         if self._csv_rows_per_file > 0:
             self._log(f"  CSV 区切り: {self._csv_rows_per_file} 件ごとにファイルを分けます")
         self._detail_index = 0
         self._collected = 0
+        self._known_collected = 0
         self._seen_companies = set()
         self._skipped_duplicates = 0
         self._skipped_filtered = 0
@@ -353,12 +402,60 @@ class Orchestrator:
             extra_columns=extra_columns,
             columns=columns,
             flush_every=self._flush_every,
-            known_list=self._known_list,
             rows_per_file=self._csv_rows_per_file,
+            apply_filters=False,
         )
         self._progress("detail", 0, len(self._urls))
         delay = self._governor.sample_page_delay()
+        if getattr(self._adapter, "extract_detail_from_html", None):
+            self._log("  詳細情報を取得します（Chrome を前面に出さず HTTP で取得します）…")
+        else:
+            self._log("  詳細情報を取得します（一覧で除外済みの店はスキップします）…")
         self._scheduler.schedule(self._phase_detail_next, delay)
+
+    def _fetch_detail_row(self, url: str) -> dict[str, str]:
+        """詳細 HTML を HTTP で取り、可能なら page.goto せず解析する。"""
+        logger = logging.getLogger("list_collector")
+        parser = getattr(self._adapter, "extract_detail_from_html", None)
+        if parser is not None:
+            try:
+                response = self._page.context.request.get(
+                    url,
+                    timeout=60000,
+                    headers={
+                        "Referer": self._page.url or getattr(self._adapter, "top_url", url),
+                        "Accept-Language": "ja-JP,ja;q=0.9",
+                    },
+                )
+                if response.ok:
+                    row = parser(response.text(), url)
+                    if row:
+                        name = (
+                            row.get("企業名")
+                            or row.get("社名")
+                            or row.get("会社名")
+                            or row.get("店名")
+                            or ""
+                        )
+                        if name:
+                            return row
+            except Exception as exc:
+                logger.warning("HTTP 詳細取得に失敗。ブラウザ遷移に切り替えます: %s", exc)
+
+        self._page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        return self._adapter.extract_detail(self._page, url)
+
+    def _ensure_detail_page(self) -> bool:
+        """詳細取得に使うタブが生きているかだけ確認する（前面表示はしない）。"""
+        try:
+            if self._page.is_closed():
+                raise RuntimeError("closed")
+            _ = self._page.url
+            return True
+        except Exception as exc:
+            self._log(f"ブラウザタブに接続できません。詳細取得を中断します: {exc}")
+            self._finish(self._csv_path)
+            return False
 
     def _phase_detail_next(self) -> None:
         if self._stopped:
@@ -370,14 +467,31 @@ class Orchestrator:
             self._finish(self._csv_path)
             return
 
+        if not self._ensure_detail_page():
+            return
+
         url = self._urls[self._detail_index]
         index = self._detail_index + 1
         skip_governor = False
         light_skip = False
 
+        list_open_skip = getattr(self._adapter, "list_open_date_skip_reason", None)
+        if callable(list_open_skip):
+            pre_reason = list_open_skip(url)
+            if pre_reason:
+                self._skipped_open_date += 1
+                name = self._open_date_skip_label(url)
+                self._log(
+                    f"[{index}/{len(self._urls)}] {name} を一覧判定でスキップ（{pre_reason}）"
+                )
+                self._progress("detail", self._collected, self._progress_total())
+                self._detail_index = index
+                delay = self._governor.sample_skip_rest_seconds()
+                self._scheduler.schedule(self._phase_detail_next, delay)
+                return
+
         try:
-            self._page.goto(url, wait_until="domcontentloaded")
-            row = self._adapter.extract_detail(self._page, url)
+            row = self._fetch_detail_row(url)
             self._normalize_csv_fields(row)
             assert self._writer is not None
             name = (
@@ -395,8 +509,18 @@ class Orchestrator:
             if not skip_reason and self._recruitment_areas:
                 if not self._match_recruitment_area(row):
                     skip_reason = "住所が指定した県・市と一致しない"
-            if not skip_reason:
-                skip_reason = csv_skip_reason(row, self._known_list)
+            is_known = False
+            if not skip_reason and self._known_list is not None:
+                is_known = self._known_list.contains(row)
+                if is_known and not self._include_known:
+                    skip_reason = "実装済みリストに既出"
+            if (
+                not skip_reason
+                and not is_known
+                and is_mobile_phone(row_phone(row))
+                and not self._include_mobile
+            ):
+                skip_reason = "携帯電話番号（090/080/070）のため除外"
             if skip_reason:
                 if skip_reason == "実装済みリストに既出":
                     self._skipped_known += 1
@@ -409,6 +533,10 @@ class Orchestrator:
                     light_skip = True
                 elif skip_reason.startswith("従業員数"):
                     self._skipped_filtered += 1
+                    light_skip = True
+                elif skip_reason.startswith("オープン日"):
+                    self._skipped_open_date += 1
+                    skip_governor = bool(row.pop("_skip_governor", ""))
                     light_skip = True
                 else:
                     self._skipped_filtered += 1
@@ -426,7 +554,25 @@ class Orchestrator:
                     )
                     self._progress("detail", self._collected, self._progress_total())
                 else:
-                    blocked = self._writer.append(row)
+                    target_writer = self._writer
+                    if is_known:
+                        if self._known_writer is None:
+                            columns = self._adapter.csv_columns()
+                            extra_columns = self._adapter.extra_columns()
+                            if columns is None:
+                                columns = COMMON_COLUMNS + extra_columns
+                            self._known_writer = CsvWriter(
+                                self._output_dir,
+                                self._adapter.site_id,
+                                extra_columns=extra_columns,
+                                columns=columns,
+                                flush_every=self._flush_every,
+                                rows_per_file=self._csv_rows_per_file,
+                                file_label="投入済み",
+                                apply_filters=False,
+                            )
+                        target_writer = self._known_writer
+                    blocked = target_writer.append(row)
                     if blocked:
                         if blocked == "実装済みリストに既出":
                             self._skipped_known += 1
@@ -439,16 +585,22 @@ class Orchestrator:
                         if dup_key:
                             self._seen_companies.add(dup_key)
                         self._collected += 1
-                        if self._writer.last_closed_path:
-                            self._log(f"CSV を区切って保存しました: {self._writer.last_closed_path}")
-                        self._csv_path = self._writer.file_path
-                        if self._known_list:
+                        if is_known:
+                            self._known_collected += 1
+                        if target_writer.last_closed_path:
+                            self._log(
+                                f"CSV を区切って保存しました: {target_writer.last_closed_path}"
+                            )
+                        if not is_known:
+                            self._csv_path = self._writer.file_path
+                        if self._known_list and not is_known:
                             try:
                                 self._known_list.append_new(row)
                                 self._appended_known += 1
                             except Exception as exc:
                                 self._log(f"実装済みリストへの追記に失敗: {exc}")
-                        self._log(f"[{index}/{len(self._urls)}] {name}")
+                        destination = "（投入済みCSV）" if is_known else ""
+                        self._log(f"[{index}/{len(self._urls)}] {name}{destination}")
                         self._progress("detail", self._collected, self._progress_total())
         except Exception as exc:
             self._log(f"[{index}/{len(self._urls)}] エラー: {exc}")
@@ -523,6 +675,14 @@ class Orchestrator:
             return self._max_items
         return len(self._urls)
 
+    def _open_date_skip_label(self, url: str) -> str:
+        open_dates = getattr(self._adapter, "_open_dates", None)
+        if isinstance(open_dates, dict):
+            cached = open_dates.get(url, "")
+            if cached:
+                return cached
+        return url.rstrip("/").split("/")[-1] or url
+
     def _match_recruitment_area(self, row: dict[str, str]) -> bool:
         """住所が、選んだ県・市（市未指定なら県だけ）のどれかと一致するか判定する。"""
         address = normalize_text(
@@ -556,13 +716,22 @@ class Orchestrator:
             if self._writer.file_path:
                 csv_path = self._writer.file_path
             self._writer = None
+        known_files: list[Path] = []
+        if self._known_writer:
+            self._known_writer.close()
+            known_files = list(self._known_writer.closed_paths)
+            self._known_writer = None
 
-        if csv_path and self._collected > 0:
+        if (csv_path or known_files) and self._collected > 0:
             if csv_files:
                 for path in csv_files:
                     self._log(f"CSV を保存しました: {path}")
-            else:
+            elif csv_path:
                 self._log(f"CSV を保存しました: {csv_path}")
+            for path in known_files:
+                self._log(f"投入済みCSVを保存しました: {path}")
+            if self._known_collected:
+                self._log(f"投入済みCSV: {self._known_collected} 件")
             if self._skipped_duplicates:
                 self._log(
                     f"重複スキップ: {self._skipped_duplicates} 件"
@@ -599,9 +768,12 @@ class Orchestrator:
                 threading.Thread(target=refresh_work, daemon=True).start()
             if self._skipped_filtered:
                 self._log(f"フィルタでスキップ: {self._skipped_filtered} 件")
-            logger.info("Saved CSV: %s", csv_path)
+            if self._skipped_open_date:
+                self._log(f"オープン日フィルタでスキップ: {self._skipped_open_date} 件")
+            logger.info("Saved CSV: %s", csv_path or known_files[0])
         elif csv_path is None and not self._stopped:
             pass
 
         if self._finish_callback:
-            self._finish_callback(csv_path, self._collected)
+            callback_path = csv_path or (known_files[0] if known_files else None)
+            self._finish_callback(callback_path, self._collected)

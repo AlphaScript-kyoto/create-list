@@ -21,6 +21,8 @@ class CsvWriter:
         flush_every: int = 5,
         known_list: object | None = None,
         rows_per_file: int = 0,
+        file_label: str = "full",
+        apply_filters: bool = True,
     ) -> None:
         self._extra_columns = extra_columns or []
         if columns:
@@ -33,6 +35,8 @@ class CsvWriter:
         self._part = 0
         self._known_list = known_list
         self._rows_per_file = max(0, int(rows_per_file))
+        self._file_label = file_label
+        self._apply_filters = apply_filters
         self._output_dir = output_dir
         self._site_id = site_id
         self._stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -48,9 +52,12 @@ class CsvWriter:
     def _open_new_file(self) -> None:
         self._part += 1
         if self._rows_per_file > 0:
-            name = f"{self._site_id}_full_{self._stamp}_part{self._part:03d}.csv"
+            name = (
+                f"{self._site_id}_{self._file_label}_{self._stamp}"
+                f"_part{self._part:03d}.csv"
+            )
         else:
-            name = f"{self._site_id}_full_{self._stamp}.csv"
+            name = f"{self._site_id}_{self._file_label}_{self._stamp}.csv"
         self.file_path = self._output_dir / name
         self._file = self.file_path.open("w", encoding="utf-8-sig", newline="")
         self._writer = csv.DictWriter(self._file, fieldnames=self._columns, extrasaction="ignore")
@@ -59,11 +66,12 @@ class CsvWriter:
         self._file_row_count = 0
 
     def append(self, row: dict[str, str]) -> str:
-        """1 行書く。書けなければ理由を返す（携帯・実装済みは書かない）。"""
+        """1 行書く。通常は携帯・実装済みを除外し、理由を返す。"""
         self.last_closed_path = None
-        reason = csv_skip_reason(row, self._known_list)
-        if reason:
-            return reason
+        if self._apply_filters:
+            reason = csv_skip_reason(row, self._known_list)
+            if reason:
+                return reason
         if "取得日時" not in row or not row["取得日時"]:
             row = {**row, "取得日時": datetime.now().strftime("%Y/%m/%d %H:%M:%S")}
         assert self._writer is not None
@@ -99,9 +107,9 @@ class CsvWriter:
             if current not in self.closed_paths:
                 self.closed_paths.append(current)
             return
-        if self._part > 1 and current.exists():
+        if current.exists():
             try:
                 current.unlink()
             except OSError:
                 pass
-            self.file_path = self.closed_paths[-1] if self.closed_paths else current
+            self.file_path = self.closed_paths[-1] if self.closed_paths else None
