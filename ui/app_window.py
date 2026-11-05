@@ -31,6 +31,7 @@ from data.japan_areas import (
     is_placeholder,
     prefecture_choices,
 )
+from version import APP_VERSION
 
 
 class AppWindow(ctk.CTk):
@@ -68,7 +69,7 @@ class AppWindow(ctk.CTk):
         self._collect_started_at: float | None = None
         self._selected_areas: list[tuple[str, str]] = []
 
-        self.title("半手動リスト収集ツール")
+        self.title(f"半手動リスト収集ツール v{APP_VERSION}")
         self.geometry("1080x680")
         self.minsize(900, 640)
         ctk.set_appearance_mode("System")
@@ -281,7 +282,7 @@ class AppWindow(ctk.CTk):
         self._notice_label.pack(fill="x", padx=10, pady=(0, 8))
         self.bind("<Configure>", self._on_window_configure)
 
-        self._append_log("半手動リスト収集ツールを起動しました。")
+        self._append_log(f"半手動リスト収集ツール v{APP_VERSION} を起動しました。")
         self._append_log("CSV には 090/080/070 の携帯電話と、実装済みリストの既出は出しません。")
         if self._known_list_path().is_file():
             self._append_log(f"実装済みリストを検出: {self._known_list_path()}")

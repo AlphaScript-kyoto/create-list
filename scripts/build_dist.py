@@ -15,6 +15,11 @@ import zipfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from version import APP_VERSION
+
 DIST_DIR = PROJECT_ROOT / "dist" / "ListCollector"
 KNOWN_DIR_NAME = "現状のmplist"
 KNOWN_CSV_NAME = "実装済みリスト.csv"
@@ -31,6 +36,10 @@ def run_pyinstaller() -> None:
 def copy_settings() -> None:
     for name in ("config.json", "sites.json"):
         shutil.copy2(PROJECT_ROOT / name, DIST_DIR / name)
+    (DIST_DIR / "VERSION.txt").write_text(
+        f"半手動リスト収集ツール v{APP_VERSION}\n",
+        encoding="utf-8-sig",
+    )
 
 
 def remove_output(dist_dir: Path) -> None:
@@ -63,7 +72,13 @@ def copy_known_list(include: bool) -> None:
 
 
 def make_zip(dist_dir: Path = DIST_DIR) -> Path:
-    archive = shutil.make_archive(str(dist_dir), "zip", root_dir=dist_dir.parent, base_dir=dist_dir.name)
+    archive_base = dist_dir.parent / f"ListCollector_v{APP_VERSION}"
+    archive = shutil.make_archive(
+        str(archive_base),
+        "zip",
+        root_dir=dist_dir.parent,
+        base_dir=dist_dir.name,
+    )
     return Path(archive)
 
 
